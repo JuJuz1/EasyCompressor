@@ -31,13 +31,33 @@
 //#    define NULL_DEV "/dev/null"
 #endif
 
-#include <ctype.h> // TODO?
 #include <stdio.h>
-#include <stdlib.h>
 
 #include <compressor.h>
 
 #include <win32_compressor.h>
+
+PRINT_IMPL(Print) {
+    va_list args;
+    va_start(args, fmt);
+
+    switch (type) {
+    case LogType_Info: {
+        printf("[INFO]: ");
+        vprintf(fmt, args);
+    } break;
+    case LogType_Warn: {
+        printf("[WARN]: ");
+        vprintf(fmt, args);
+    } break;
+    case LogType_Error: {
+        printf("[ERROR]: ");
+        vprintf(fmt, args);
+    } break;
+    }
+
+    va_end(args);
+}
 
 static void
 GetExeDirectory(PathInfo* pathInfo) {
@@ -134,6 +154,7 @@ main(int argc, char** argv) {
     snprintf(lockFilePath, sizeof(dllPath), "%slock.tmp", pathInfo.exeDir);
 
     Memory memory = { 0 };
+    memory.exports.print = Print;
 
     // TODO: support package managers so read from PATH
     char ffmpegPath[64];
@@ -152,11 +173,7 @@ main(int argc, char** argv) {
     CompressorCode compressor = LoadCompressorCode(dllPath, tempDllPath, lockFilePath);
 
     if (compressor.compress) {
-        //const char* returnMsg =
         compressor.compress(&memory, &params);
-        //if (returnMsg && *returnMsg) {
-        //    Die(returnMsg);
-        //}
     }
 
     // TODO: Comparing the newly built dll and loading it, don't load while ffmpeg is running!

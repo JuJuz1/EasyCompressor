@@ -27,10 +27,27 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
+typedef enum LogType {
+    LogType_Info = 0,
+    LogType_Warn,
+    LogType_Error,
+} LogType;
+
+// clang-format off
+#define PRINT_IMPL(name) void name(LogType type, const char* fmt, ...)
+typedef PRINT_IMPL(print_impl);
+// clang-format on
+
+typedef struct Exports {
+    print_impl* print;
+} Exports;
+
 // Supplied to compressor dll
 typedef struct Memory {
     void* memory;
     u64 memorySize;
+
+    Exports exports;
 } Memory;
 
 typedef struct CompressorParams {
@@ -43,6 +60,6 @@ typedef struct CompressorParams {
 } CompressorParams;
 
 // clang-format off
-#define COMPRESS_IMPL(name) const char* name(Memory* memory, CompressorParams* params)
+#define COMPRESS_IMPL(name) void name(Memory* memory, CompressorParams* params)
 typedef COMPRESS_IMPL(compressor_impl);
 // clang-format on
