@@ -13,36 +13,42 @@
  *
  */
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
+// TODO: CLEANUP  ! ! ! !
 
-#ifdef _WIN32
+#if COMPRESSOR_WIN32
 #    include <io.h>
 #    include <windows.h>
 #    define POPEN _popen
 #    define PCLOSE _pclose
 #    define PATH_SEP '\\'
 #    define NULL_DEV "NUL"
-#else
-#    include <limits.h>
-#    include <unistd.h>
-#    define POPEN popen
-#    define PCLOSE pclose
-#    define PATH_SEP '/'
-#    define NULL_DEV "/dev/null"
+//#else
+//#    include <limits.h>
+//#    include <unistd.h>
+//#    define POPEN popen
+//#    define PCLOSE pclose
+//#    define PATH_SEP '/'
+//#    define NULL_DEV "/dev/null"
 #endif
+
+#include <ctype.h> // TODO?
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <compressor.h>
+
+#include <win32_compressor.h>
 
 /* --- small utils ---------------------------------------------------------- */
 
 static void
 die(const char* msg) {
-    fprintf(stderr, "compress: error: %s\n", msg);
+    fprintf(stderr, "compressor: error: %s\n", msg);
     exit(1);
 }
 
 /* Quote an argument for a shell command line.
- * Returns malloc'd string. Wraps in double quotes and escapes embedded ".
+ * Returns malloc'd string. Wraps in f64 quotes and escapes embedded ".
  * Good enough for file paths on Windows cmd.exe and POSIX /bin/sh. */
 static char*
 shquote(const char* s) {
@@ -81,7 +87,7 @@ run_capture(const char* cmd) {
         return NULL;
     }
 
-    int c;
+    i32 c;
     while ((c = fgetc(fp)) != EOF) {
         if (len + 1 >= cap) {
             cap *= 2;
@@ -107,7 +113,7 @@ run_capture(const char* cmd) {
 
 /* --- core ---------------------------------------------------------------- */
 
-static double
+static f64
 probe_duration(const char* input, const char* ffmpegPath) {
     char* q = shquote(input);
     /* -v error: silence banner; show_entries format=duration; default=noprint_wrappers=1:nokey=1 */
@@ -130,7 +136,7 @@ probe_duration(const char* input, const char* ffmpegPath) {
         die("ffprobe failed (is ffprobe on PATH or next to compress?)");
     }
 
-    double d = atof(out);
+    f64 d = atof(out);
     free(out);
     if (d <= 0.0) {
         die("could not determine video duration");
@@ -139,11 +145,78 @@ probe_duration(const char* input, const char* ffmpegPath) {
 }
 
 /* Build & run an ffmpeg command. Returns process exit code. */
-static int
+static i32
 run_ffmpeg(const char* cmd) {
     fprintf(stderr, "+ %s\n", cmd);
-    int rc = system(cmd);
+    i32 rc = system(cmd);
     return rc;
+}
+
+static void
+GetExeDirectory(PathInfo* pathInfo) {
+    GetModuleFileNameA(0, pathInfo->exeDir, sizeof(pathInfo->exeDir));
+
+    char* lastSlash = pathInfo->exeDir;
+    for (char* scan = pathInfo->exeDir; *scan; ++scan) {
+        if (*scan == PATH_SEP) {
+            lastSlash = scan;
+        }
+    }
+
+    if (lastSlash != pathInfo->exeDir) {
+        *(lastSlash + 1) = '\0';
+    }
+}
+
+static FILETIME
+GetLastWriteTime(const char* filename) {
+    FILETIME lastWriteTime = { 0 };
+
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExA(filename, GetFileExInfoStandard, &fileInfo)) {
+        lastWriteTime = fileInfo.ftLastWriteTime;
+    }
+
+    return lastWriteTime;
+}
+
+static CompressorCode
+LoadCompressorCode(const char* dllPath, const char* tempDllPath, const char* lockFilePath) {
+    CompressorCode compressorCode = { 0 };
+
+    WIN32_FILE_ATTRIBUTE_DATA ignored;
+    if (GetFileAttributesExA(lockFilePath, GetFileExInfoStandard, &ignored)) {
+        return compressorCode;
+    }
+
+    CopyFileA(dllPath, tempDllPath, FALSE);
+    compressorCode.dll = LoadLibraryA(tempDllPath);
+    compressorCode.lastWritetime = GetLastWriteTime(dllPath);
+
+    if (compressorCode.dll) {
+        compressorCode.compress = (compressor_impl*)GetProcAddress(compressorCode.dll, "Compress");
+
+        compressorCode.isValid = compressorCode.compress ? TRUE : FALSE;
+    } else {
+        printf("Failed to load dll!\n");
+    }
+
+    if (!compressorCode.isValid) {
+        printf("compressorCode is invalid, function pointers are null!\n");
+    }
+
+    return compressorCode;
+}
+
+static void
+UnloadCompressorCode(CompressorCode* compressorCode) {
+    if (compressorCode->dll) {
+        FreeLibrary(compressorCode->dll);
+        compressorCode->dll = 0;
+    }
+
+    compressorCode->compress = 0;
+    compressorCode->isValid = FALSE;
 }
 
 int
@@ -156,9 +229,38 @@ main(int argc, char** argv) {
         return 2;
     }
 
+    PathInfo pathInfo = { 0 };
+    GetExeDirectory(&pathInfo);
+
+    char dllPath[MAX_PATH_COUNT];
+    snprintf(dllPath, sizeof(dllPath), "%scompressor.dll", pathInfo.exeDir);
+    char tempDllPath[MAX_PATH_COUNT];
+    snprintf(tempDllPath, sizeof(dllPath), "%scompressor_temp.dll", pathInfo.exeDir);
+
+    char lockFilePath[MAX_PATH_COUNT];
+    snprintf(lockFilePath, sizeof(dllPath), "%slock.tmp", pathInfo.exeDir);
+
+    Memory memory = { 0 };
+
+    CompressorCode compressor = LoadCompressorCode(dllPath, tempDllPath, lockFilePath);
+
+    if (compressor.compress) {
+        i32 a = compressor.compress(&memory);
+        printf("%d", a);
+    }
+
+    // TODO: Comparing the newly built dll and loading it, don't load while ffmpeg is running!
+    //FILETIME newDllWriteTime = GetLastWriteTime(dllPath);
+    //if (CompareFileTime(&compressor.lastWritetime, &newDllWriteTime)) {
+    //    UnloadCompressorCode(&compressor);
+    //    compressor = LoadCompressorCode(dllPath, tempDllPath, lockFilePath);
+    //}
+
+    // TODO: Remove the CLI and replace with UI
+
     const char* input = argv[1];
     const char* output = argv[2];
-    double target_mb = atof(argv[3]);
+    f64 target_mb = atof(argv[3]);
     if (target_mb <= 0.0) {
         die("target size must be > 0 MB");
     }
@@ -168,15 +270,15 @@ main(int argc, char** argv) {
     snprintf(ffmpegPath, sizeof(ffmpegPath), "vendor%cffmpeg%c", PATH_SEP, PATH_SEP);
 
     /* 1. duration */
-    double duration = probe_duration(input, ffmpegPath);
+    f64 duration = probe_duration(input, ffmpegPath);
     fprintf(stderr, "duration: %.3f s\n", duration);
 
     /* 2. bitrate budget (bits/sec). 1 MB = 1024*1024 bytes per the user's intent. */
-    double total_bits = target_mb * 1024.0 * 1024.0 * 8.0;
-    double total_kbps = (total_bits / duration) / 1000.0;
+    f64 total_bits = target_mb * 1024.0 * 1024.0 * 8.0;
+    f64 total_kbps = (total_bits / duration) / 1000.0;
 
     /* Reserve audio. Scale down for very small targets so we don't go negative. */
-    double audio_kbps = 128.0;
+    f64 audio_kbps = 128.0;
     if (total_kbps < 256.0) {
         audio_kbps = 64.0;
     }
@@ -184,8 +286,9 @@ main(int argc, char** argv) {
         audio_kbps = 32.0;
     }
 
-    /* Apply a small safety margin (~7%) so muxer overhead doesn't push us over. */
-    double video_kbps = (total_kbps - audio_kbps) * 0.97;
+    // TODO: 4-5% is enough, 3% might be cutting it too close
+    /* Apply a small safety margin (~3%) so muxer overhead doesn't push us over. */
+    f64 video_kbps = (total_kbps - audio_kbps) * 0.97;
     if (video_kbps < 50.0) {
         die("target size too small for this video duration "
             "(video bitrate would be < 50 kbps)");
@@ -214,7 +317,7 @@ main(int argc, char** argv) {
                  "-i %s -c:v libx264 -preset medium -b:v %.0fk "
                  "-pass 1 -passlogfile %s -an -f null %s",
                  ffmpegPath, qin, video_kbps, passlog, NULL_DEV);
-        int rc = run_ffmpeg(cmd);
+        i32 rc = run_ffmpeg(cmd);
         free(cmd);
         if (rc != 0) {
             free(qin);
@@ -236,7 +339,7 @@ main(int argc, char** argv) {
                  "-pass 2 -passlogfile %s "
                  "-c:a aac -b:a %.0fk -movflags +faststart %s",
                  ffmpegPath, qin, video_kbps, passlog, audio_kbps, qout);
-        int rc = run_ffmpeg(cmd);
+        i32 rc = run_ffmpeg(cmd);
         free(cmd);
         if (rc != 0) {
             free(qin);

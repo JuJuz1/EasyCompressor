@@ -1,4 +1,4 @@
-# compress
+# EasyCompress
 
 A simple C CLI that compresses any video to a target file size using FFmpeg
 
@@ -6,7 +6,11 @@ A simple C CLI that compresses any video to a target file size using FFmpeg
 compress <input> <output> <target_size_MB>
 ```
 
+The end goal for this project is to act as a native desktop application replacement for this compression website I have used https://www.freeconvert.com/video-compressor
+
 ## Requirements
+
+TODO: redistribute the binaries with a release build, or offer both with and without?
 
 The program depends on ffmpeg and ffprobe. The easiest way to get these on Windows: from the git
 master or release builds section of https://www.gyan.dev/ffmpeg/builds/ Download a full_build of any
@@ -18,7 +22,7 @@ named "vendor" and inside that named "ffmpeg". Then copy all the contents of the
 
 ### Windows
 
-Visual Studio installed
+[Visual Studio](https://visualstudio.microsoft.com/) installed
 
 Run x64 Native Tools Command Prompt for VS (version optional)
 
