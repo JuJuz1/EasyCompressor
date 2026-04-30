@@ -33,7 +33,16 @@ typedef struct Memory {
     u64 memorySize;
 } Memory;
 
+typedef struct CompressorParams {
+    const char* ffmpegPath;
+
+    const char* input;
+    const char* output;
+
+    double targetSizeMb;
+} CompressorParams;
+
 // clang-format off
-#define COMPRESS_IMPL(name) i32 name(Memory* memory)
+#define COMPRESS_IMPL(name) const char* name(Memory* memory, CompressorParams* params)
 typedef COMPRESS_IMPL(compressor_impl);
 // clang-format on
