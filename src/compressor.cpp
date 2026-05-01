@@ -11,9 +11,9 @@
 #    define NULL_DEV "NUL"
 #endif
 
-#define PRINT(fmt, ...) (gMemory->exports.print(LogType_Info, fmt, ##__VA_ARGS__))
-#define PRINT_WARN(fmt, ...) (gMemory->exports.print(LogType_Warn, fmt, ##__VA_ARGS__))
-#define PRINT_ERR(fmt, ...) (gMemory->exports.print(LogType_Error, fmt, ##__VA_ARGS__))
+#define PRINT(fmt, ...) (gMemory->exports.print(LogType::Info, fmt, ##__VA_ARGS__))
+#define PRINT_WARN(fmt, ...) (gMemory->exports.print(LogType::Warn, fmt, ##__VA_ARGS__))
+#define PRINT_ERR(fmt, ...) (gMemory->exports.print(LogType::Error, fmt, ##__VA_ARGS__))
 
 static Memory* gMemory;
 
@@ -51,7 +51,7 @@ run_capture(const char* cmd) {
         return NULL;
     }
 
-    size_t cap = 256, len = 0;
+    size_t cap = 16, len = 0;
     char* buf = (char*)malloc(cap);
     if (!buf) {
         PCLOSE(fp);
@@ -62,6 +62,7 @@ run_capture(const char* cmd) {
     while ((c = fgetc(fp)) != EOF) {
         if (len + 1 >= cap) {
             cap *= 2;
+            PRINT("Realloc inside run_capture! Current cap: %u\n", cap);
             char* nb = (char*)realloc(buf, cap);
             if (!nb) {
                 free(buf);
@@ -101,20 +102,21 @@ probe_duration(const char* input, const char* ffmpegPath) {
              "%sffprobe -v error -show_entries format=duration "
              "-of default=noprint_wrappers=1:nokey=1 %s",
              ffmpegPath, input);
+
     //free(q);
 
     char* out = run_capture(cmd);
     //free(cmd);
     if (!out || !*out) {
         free(out);
-        PRINT("ffprobe failed (is ffprobe on PATH or next to compress?)\n");
+        PRINT_ERR("ffprobe failed (is ffprobe on PATH or next to compress?)\n");
         return -1;
     }
 
     f64 d = atof(out);
     free(out);
     if (d <= 0.0) {
-        PRINT(LogType_Info, "could not determine video duration\n");
+        PRINT_WARN("could not determine video duration\n");
     }
 
     return d;
@@ -123,7 +125,7 @@ probe_duration(const char* input, const char* ffmpegPath) {
 /* Build & run an ffmpeg command. Returns process exit code. */
 static i32
 run_ffmpeg(const char* cmd) {
-    PRINT("+ %s\n", cmd);
+    PRINT("Running command:\n%s\n\n", cmd);
     i32 rc = system(cmd);
     return rc;
 }
@@ -157,14 +159,15 @@ COMPRESS_IMPL(Compress) {
 
     // TODO: 4-5% is enough, 3% might be cutting it too close
     /* Apply a small safety margin (~3%) so muxer overhead doesn't push us over. */
-    f64 video_kbps = (totalKbps - audioKbps) * 0.97;
-    if (video_kbps < 50.0) {
+    f64 multiplier = 0.97;
+    f64 videoKbps = (totalKbps - audioKbps) * multiplier;
+    if (videoKbps < 50.0) {
         PRINT_WARN("Target size too small for this video duration "
                    "(video bitrate would be < 50 kbps)");
     }
 
-    PRINT("Target: %.2f MB | total: %.1f kbps | video: %.1f kbps | audio: %.1f kbps\n",
-          params->targetSizeMb, totalKbps, video_kbps, audioKbps);
+    PRINT("Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f kbps\n",
+          params->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
 
     /* 3. two-pass encode */
     //char* qin = shquote(params->input);
@@ -190,7 +193,7 @@ COMPRESS_IMPL(Compress) {
                  "%sffmpeg -y -hide_banner -loglevel error -stats "
                  "-i %s -c:v libx264 -preset medium -b:v %.0fk "
                  "-pass 1 -passlogfile %s -an -f null %s",
-                 params->ffmpegPath, qin, video_kbps, passLog, NULL_DEV);
+                 params->ffmpegPath, qin, videoKbps, passLog, NULL_DEV);
 
         i32 rc = run_ffmpeg(cmd);
         //free(cmd);
@@ -216,7 +219,7 @@ COMPRESS_IMPL(Compress) {
                  "-i %s -c:v libx264 -preset medium -b:v %.0fk "
                  "-pass 2 -passlogfile %s "
                  "-c:a aac -b:a %.0fk -movflags +faststart %s",
-                 params->ffmpegPath, qin, video_kbps, passLog, audioKbps, qout);
+                 params->ffmpegPath, qin, videoKbps, passLog, audioKbps, qout);
 
         i32 rc = run_ffmpeg(cmd);
         //free(cmd);
@@ -242,7 +245,5 @@ COMPRESS_IMPL(Compress) {
 
     // TODO: show the compressed file size
 
-    fprintf(stderr, "done -> %s\n", params->output);
-
-    return;
+    fprintf(stderr, "Done -> %s\n", params->output);
 }

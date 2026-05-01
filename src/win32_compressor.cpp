@@ -42,15 +42,15 @@ PRINT_IMPL(Print) {
     va_start(args, fmt);
 
     switch (type) {
-    case LogType_Info: {
+    case LogType::Info: {
         printf("[INFO]: ");
         vprintf(fmt, args);
     } break;
-    case LogType_Warn: {
+    case LogType::Warn: {
         printf("[WARN]: ");
         vprintf(fmt, args);
     } break;
-    case LogType_Error: {
+    case LogType::Error: {
         printf("[ERROR]: ");
         vprintf(fmt, args);
     } break;
@@ -63,15 +63,16 @@ static void
 GetExeDirectory(PathInfo* pathInfo) {
     GetModuleFileNameA(0, pathInfo->exeDir, sizeof(pathInfo->exeDir));
 
-    char* lastSlash = pathInfo->exeDir;
-    for (char* scan = pathInfo->exeDir; *scan; ++scan) {
+    i32 lastSlashIndex = -1;
+    char* scan = pathInfo->exeDir;
+    for (i32 i = 0; *scan; ++scan, ++i) {
         if (*scan == PATH_SEP) {
-            lastSlash = scan;
+            lastSlashIndex = i;
         }
     }
 
-    if (lastSlash != pathInfo->exeDir) {
-        *(lastSlash + 1) = '\0';
+    if (lastSlashIndex >= 0) {
+        pathInfo->exeDir[lastSlashIndex + 1] = '\0';
     }
 }
 
@@ -127,8 +128,8 @@ UnloadCompressorCode(CompressorCode* compressorCode) {
 }
 
 static void
-Die(const char* msg) {
-    fprintf(stderr, "compressor: error: %s\n", msg);
+Exit(const char* msg) {
+    Print(LogType::Error, "%s\n", msg);
     exit(1);
 }
 
@@ -167,7 +168,7 @@ main(int argc, char** argv) {
 
     params.targetSizeMb = atof(argv[3]);
     if (params.targetSizeMb <= 0.0) {
-        Die("target size must be > 0 MB");
+        Exit("Target size must be > 0 MB");
     }
 
     CompressorCode compressor = LoadCompressorCode(dllPath, tempDllPath, lockFilePath);
