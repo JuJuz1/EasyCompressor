@@ -17,39 +17,59 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
-enum class LogType {
-    Info = 0,
-    Warn,
-    Error,
-};
-
 // clang-format off
-#define PRINT_IMPL(name) void name(LogType type, const char* fmt, ...)
-typedef PRINT_IMPL(print_impl);
+#if COMPRESSOR_DEBUG
+#    define ASSERT(expr) if (!(expr)) { *(static_cast<int*>(nullptr)) = 0; }
+#else
+#    define ASSERT(expr)
+#endif
 // clang-format on
 
-struct Exports {
-    print_impl* print;
-};
+static i32
+StrLength(const char* str) {
+    ASSERT(str);
 
-// Supplied to compressor dll
-struct Memory {
-    void* memory;
-    u64 memorySize;
+    i32 len{};
+    while (*str++) {
+        len++;
+    }
 
-    Exports exports;
-};
+    return len;
+}
 
-struct CompressorParams {
-    const char* ffmpegPath;
+//enum class LogType {
+//    Info = 0,
+//    Warn,
+//    Error,
+//};
 
-    const char* input;
-    const char* output;
+//// clang-format off
+//#define PRINT_IMPL(name) void name(LogType type, const char* fmt, ...)
+//typedef PRINT_IMPL(print_impl);
+//// clang-format on
 
-    double targetSizeMb;
-};
+//struct Exports {
+//    print_impl* print;
+//};
 
-// clang-format off
-#define COMPRESS_IMPL(name) void name(Memory* memory, CompressorParams* params)
-typedef COMPRESS_IMPL(compressor_impl);
-// clang-format on
+//// Supplied to compressor dll
+//struct Memory {
+//    void* memory;
+//    u64 memorySize;
+
+//    Exports exports;
+//};
+
+//struct CompressorParams {
+//    const char* ffmpegPath;
+
+//    const char* input;
+//    const char* output;
+
+//    double targetSizeMb;
+//};
+
+//// clang-format off
+//#define COMPRESS_IMPL(name) void name(Memory* memory, CompressorParams* params)
+//typedef COMPRESS_IMPL(compressor_impl);
+//// clang-format on

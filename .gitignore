@@ -63,3 +63,9 @@ vendor/
 # ffmpeg logs
 *.log
 *.log.mbtree
+
+# ImGui ini file
+imgui.ini
+
+# Test data
+*.mp4

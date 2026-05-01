@@ -3,7 +3,7 @@
 IF NOT EXIST build mkdir build
 pushd build
 
-set commonCompilerDefines=-DCOMPRESSOR_WIN32=1 -DCOMPRESS_INTERNAL=1 -DCOMPRESS_DEBUG=1
+set commonCompilerDefines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_INTERNAL=1 -DCOMPRESSOR_DEBUG=1
 
 set commonCompilerFlags=%commonCompilerDefines% /W4 /MTd /Zi /Zc:__cplusplus /FC /Fm /Od /Oi /EHa- /GR- /std:c++20 /nologo
 rem /LTCG link time optimization
@@ -11,23 +11,7 @@ set commonLinkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OP
 set win32Libraries=Kernel32.lib User32.lib Shell32.lib
 set dxLibraries=d3d11.lib dxgi.lib d3dcompiler.lib
 
-set exportedFunctions=/EXPORT:Compress
-
-rem MSVC pdb sometimes don't build correctly and cause issues with Visual Studio
-del *.pdb >nul 2>nul
-
-echo WAITING FOR PDB > lock.tmp
-
 set buildFailed=0
-
-cl %commonCompilerFlags% ../src/compressor.cpp /I ../src /LD /link /PDB:compressor_%random%.pdb %exportedFunctions% %commonLinkerFlags%
-
-if ERRORLEVEL 1 (
-    set buildFailed=1
-    echo [31m[1mcompressor.cpp failed[0m[1m
-)
-
-del lock.tmp
 
 cl %commonCompilerFlags% ../src/win32_compressor_ui.cpp /I ../src /I ../vendor/imgui /link %commonLinkerFlags% %win32Libraries% %dxLibraries%
 
