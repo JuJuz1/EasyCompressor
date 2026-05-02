@@ -22,6 +22,9 @@ if ERRORLEVEL 1 (
 
 popd
 
+rem Don't remember the layout when testing UX
+del imgui.ini
+
 set NOW=%TIME:~0,8%
 
 echo.

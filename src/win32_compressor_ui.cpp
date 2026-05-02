@@ -28,8 +28,6 @@
 
 #endif
 
-// TODO: test just unity build
-
 #include "imgui_draw.cpp"
 #include "imgui_tables.cpp"
 #include "imgui_widgets.cpp"
@@ -43,11 +41,11 @@
 //#include "backends/imgui_impl_win32.h"
 //#include "imgui.h"
 
-extern "C" {
+//extern "C" {
 #include "compressor.h"
 
 #include "win32_compressor.h"
-}
+//}
 
 // -----------------------------------------------------------------------------
 // Queue model
@@ -75,6 +73,7 @@ struct UIJob {
 
 #define MAX_JOBS 10
 
+// All in MB
 #define DEFAULT_TARGET_SIZE 10.0f
 #define MIN_TARGET_SIZE 0.5f
 #define MAX_TARGET_SIZE 5000.0f
@@ -91,8 +90,8 @@ struct AppState {
     //Memory memory = {};
     char ffmpegPath[64];
 
-    f32 globalTargetSize;
-    f32 savedTargetSize;
+    f32 globalTargetSize; // The global for all targets
+    f32 savedTargetSize;  // The added job will have this target size
 };
 
 static AppState gAppState;
@@ -140,7 +139,7 @@ AddJob(const char* path) {
 
     snprintf(j->output, sizeof(j->output), "%s%s", j->input, "_compressed.mp4");
     j->status = JobStatus::QUEUED;
-    j->targetSizeMb = DEFAULT_TARGET_SIZE;
+    j->targetSizeMb = gAppState.savedTargetSize;
 
     char buf[2048];
     snprintf(buf, sizeof(buf),
@@ -157,6 +156,10 @@ RemoveJob(i32 index) {
         return;
     }
 
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Removed job %d\n", index);
+    OutputDebugStringA(buf);
+
     for (i32 i = index; i < gAppState.jobCount - 1; ++i) {
         gAppState.jobs[i] = gAppState.jobs[i + 1];
     }
@@ -164,26 +167,26 @@ RemoveJob(i32 index) {
     gAppState.jobCount--;
 }
 
-static void
-MoveJob(int from, int to) {
-    if (from == to || from < 0 || to < 0 || from >= gAppState.jobCount ||
-        to >= gAppState.jobCount) {
-        return;
-    }
+//static void
+//MoveJob(int from, int to) {
+//    if (from == to || from < 0 || to < 0 || from >= gAppState.jobCount ||
+//        to >= gAppState.jobCount) {
+//        return;
+//    }
 
-    UIJob tmp = gAppState.jobs[from];
-    if (from < to) {
-        for (int i = from; i < to; ++i) {
-            gAppState.jobs[i] = gAppState.jobs[i + 1];
-        }
-    } else {
-        for (int i = from; i > to; --i) {
-            gAppState.jobs[i] = gAppState.jobs[i - 1];
-        }
-    }
+//    UIJob tmp = gAppState.jobs[from];
+//    if (from < to) {
+//        for (int i = from; i < to; ++i) {
+//            gAppState.jobs[i] = gAppState.jobs[i + 1];
+//        }
+//    } else {
+//        for (int i = from; i > to; --i) {
+//            gAppState.jobs[i] = gAppState.jobs[i - 1];
+//        }
+//    }
 
-    gAppState.jobs[to] = tmp;
-}
+//    gAppState.jobs[to] = tmp;
+//}
 
 // -----------------------------------------------------------------------------
 // Worker thread — runs jobs sequentially. For parallel encoding, spawn N of these
@@ -192,7 +195,7 @@ MoveJob(int from, int to) {
 
 static unsigned __stdcall
 WorkerThread(void*) {
-    for (int i = 0; i < gAppState.jobCount; ++i) {
+    for (i32 i = 0; i < gAppState.jobCount; ++i) {
         if (InterlockedCompareExchange(&gAppState.cancelRequested, 0, 0)) {
             break;
         }
@@ -225,6 +228,10 @@ WorkerThread(void*) {
 static void
 StartBatch() {
     OutputDebugStringA("Start batch\n");
+    for (i32 i = 0; i < gAppState.jobCount; ++i) {
+        gAppState.jobs[i].status = JobStatus::RUNNING;
+    }
+
     //if (InterlockedCompareExchange(&gAppState.workerRunning, 1, 0) != 0) {
     //    return; // already running
     //}
@@ -255,8 +262,16 @@ GetExeDirectory(PathInfo* pathInfo) {
     }
 }
 
+// TODO: allow changing output dir by explorer and manually
+static void
+OpenInExplorer(const char* path) {
+    char cmd[MAX_PATH_COUNT];
+    snprintf(cmd, sizeof(cmd), "explorer.exe /select,\"%s\"", path);
+    ShellExecuteA(NULL, "open", "explorer.exe", cmd + 13, NULL, SW_SHOWNORMAL);
+}
+
 // -----------------------------------------------------------------------------
-// ImGui frame
+// ImGui
 // -----------------------------------------------------------------------------
 
 static const char*
@@ -278,10 +293,8 @@ StatusText(JobStatus s) {
 static void
 SetTargetSizeForAll(f32 targetSize) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "Set target size for all %.2f\n", targetSize);
+    snprintf(buf, sizeof(buf), "Set target size for all %.2f MB\n", targetSize);
     OutputDebugStringA(buf);
-
-    gAppState.globalTargetSize = targetSize;
 
     for (i32 i = 0; i < gAppState.jobCount; ++i) {
         UIJob* job = &gAppState.jobs[i];
@@ -291,11 +304,22 @@ SetTargetSizeForAll(f32 targetSize) {
     }
 }
 
+static f32
+ClampF32(f32 value, f32 min, f32 max) {
+    if (value < min) {
+        return min;
+    } else if (value > max) {
+        return max;
+    }
+
+    return value;
+}
+
 static void
 DrawUi() {
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("Compressor", nullptr,
+    ImGui::Begin("EasyCompressor", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
 
@@ -317,10 +341,6 @@ DrawUi() {
                 OutputDebugStringA("About clicked\n");
             }
 
-            if (ImGui::MenuItem("Docs")) {
-                OutputDebugStringA("Docs clicked\n");
-            }
-
             ImGui::EndMenu();
         }
 
@@ -335,36 +355,33 @@ DrawUi() {
     const i32 sliderWidth = 190;
 
     // TODO: allow user supplied via a config file?
-    ImGui::Text("Change target size for current files:");
+    ImGui::Text("Change target size for ALL files:");
+    f32 newGlobalTargetSize = gAppState.globalTargetSize;
     ImGui::SetNextItemWidth(sliderWidth);
-
-    f32 globalTargetSize = gAppState.globalTargetSize;
-    ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::SliderFloat("##mb_slider_global", &globalTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
+    ImGui::SliderFloat("##mb_slider_global", &newGlobalTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                        "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
     ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::InputFloat("##mb_input_global", &globalTargetSize, 0.0f, 0.0f, "%.3f MB");
-    if (globalTargetSize < 0.0f) {
-        globalTargetSize = MIN_TARGET_SIZE;
-    }
+    ImGui::InputFloat("##mb_input_global", &newGlobalTargetSize, 0.0f, 0.0f, "%.3f MB");
+    newGlobalTargetSize = ClampF32(newGlobalTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
     if (ImGui::Button("5 MB##global", ImVec2(80, 0))) {
-        globalTargetSize = 5.0f;
+        newGlobalTargetSize = 5.0f;
     }
 
     ImGui::SameLine();
     if (ImGui::Button("10 MB##global", ImVec2(80, 0))) {
-        globalTargetSize = 10.0f;
+        newGlobalTargetSize = 10.0f;
     }
 
     ImGui::SameLine();
     if (ImGui::Button("50 MB##global", ImVec2(80, 0))) {
-        globalTargetSize = 50.0f;
+        newGlobalTargetSize = 50.0f;
     }
 
-    if (gAppState.globalTargetSize != globalTargetSize) {
-        SetTargetSizeForAll(globalTargetSize);
+    if (newGlobalTargetSize != gAppState.globalTargetSize) {
+        gAppState.globalTargetSize = newGlobalTargetSize;
+        SetTargetSizeForAll(newGlobalTargetSize);
     }
 
     ImGui::Separator();
@@ -379,9 +396,7 @@ DrawUi() {
 
     ImGui::SetNextItemWidth(sliderWidth);
     ImGui::InputFloat("##mb_input_saved", savedTargetSize, 0.0f, 0.0f, "%.3f MB");
-    if (*savedTargetSize < 0.0f) {
-        *savedTargetSize = MIN_TARGET_SIZE;
-    }
+    *savedTargetSize = ClampF32(*savedTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
     if (ImGui::Button("5 MB##saved", ImVec2(80, 0))) {
         *savedTargetSize = 5.0f;
@@ -406,11 +421,12 @@ DrawUi() {
     if (ImGui::BeginTable("queue", 5,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 20);
+        ImGui::TableSetupColumn(
+            "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
         ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, 180);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 90);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
         //i32 moveFrom = -1, moveTo = -1, removeIdx = -1;
@@ -423,9 +439,23 @@ DrawUi() {
             ImGui::TableSetColumnIndex(0);
             ImGui::Text("%d", i + 1);
 
+            UIJob* job = &gAppState.jobs[i];
+
             ImGui::TableSetColumnIndex(1);
-            //ImGui::Selectable(gAppState.jobs[i].input, false);
-            ImGui::Text(gAppState.jobs[i].input);
+            ImGui::Selectable(job->input);
+            //ImGui::Text(job->input);
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("Input:\n%s", job->input);
+                ImGui::Text("Output:\n%s", job->output);
+                ImGui::Separator();
+                ImGui::Text("Click to open in explorer\n");
+                ImGui::EndTooltip();
+            }
+
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                OpenInExplorer(job->input);
+            }
 
             // Drag-drop reorder
             //if (!busy && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
@@ -445,28 +475,26 @@ DrawUi() {
 
             ImGui::TableSetColumnIndex(2);
 
-            f32* mb = &gAppState.jobs[i].targetSizeMb;
-            // slider
+            f32* targetSize = &gAppState.jobs[i].targetSizeMb;
             ImGui::SetNextItemWidth(sliderWidth);
-            ImGui::SliderFloat("##mb_slider", mb, MIN_TARGET_SIZE, MAX_TARGET_SIZE, "%.1f MB",
-                               ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("##mb_slider", targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
+                               "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
-            // direct input field (more precise control)
             ImGui::SetNextItemWidth(sliderWidth);
-            ImGui::InputFloat("##mb_input", mb, 0.0f, 0.0f, "%.3f MB");
-            if (*mb < 0.0f) {
-                *mb = MIN_TARGET_SIZE;
-            }
+            ImGui::InputFloat("##mb_input", targetSize, 0.0f, 0.0f, "%.3f MB");
+            *targetSize = ClampF32(*targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
             ImGui::TableSetColumnIndex(3);
             ImGui::TextUnformatted(StatusText(static_cast<JobStatus>(
                 InterlockedCompareExchange(&gAppState.jobs[i].status, 0, 0))));
 
             ImGui::TableSetColumnIndex(4);
-            UIJob* job = &gAppState.jobs[i];
-            if (job->status != JobStatus::RUNNING && ImGui::SmallButton("X")) {
+            ImGui::BeginDisabled(job->status == JobStatus::RUNNING);
+            if (ImGui::SmallButton("X")) {
                 removeIndex = i;
             }
+
+            ImGui::EndDisabled();
 
             ImGui::PopID();
         }
@@ -481,8 +509,6 @@ DrawUi() {
             RemoveJob(removeIndex);
         }
     }
-
-    ImGui::Separator();
 
     ImGui::BeginDisabled(busy || gAppState.jobCount == 0);
     if (ImGui::Button("Start", ImVec2(120, 0))) {
@@ -500,7 +526,7 @@ DrawUi() {
     //ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(busy);
+    ImGui::BeginDisabled(busy || gAppState.jobCount == 0);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
         OutputDebugStringA("Clear\n");
         gAppState.jobCount = 0;
@@ -647,7 +673,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     f32 mainScale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    const auto* name = L"Compressor";
+    const auto* name = L"EasyCompressor";
     WNDCLASSEXW windowClass = { sizeof(windowClass),
                                 CS_CLASSDC,
                                 WndProc,
