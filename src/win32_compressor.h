@@ -6,12 +6,3 @@ struct PathInfo {
     char exeDir[MAX_PATH_COUNT]; // Absolute path to the exe directory
     //char ffmpegPath[MAX_PATH_COUNT];
 };
-
-//struct CompressorCode {
-//    HMODULE dll;
-//    FILETIME lastWritetime;
-
-//    compressor_impl* compress;
-
-//    bool32 isValid;
-//};

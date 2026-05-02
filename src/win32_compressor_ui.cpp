@@ -19,6 +19,7 @@
 
 #    include <windows.h>
 
+#    include <commdlg.h> // GetSaveFileNameA
 #    include <d3d11.h>
 #    include <io.h>
 #    include <process.h>  // _beginthreadex
@@ -96,18 +97,6 @@ struct AppState {
 
 static AppState gAppState;
 
-// TODO: take a close look at
-//static void
-//DeriveOutputPath(const char* in, char* out, size_t cap) {
-//    const char* dot = strrchr(in, '.');
-//    size_t baseLen = dot ? (size_t)(dot - in) : strlen(in);
-//    if (baseLen > cap - 32) {
-//        baseLen = cap - 32;
-//    }
-//    memcpy(out, in, baseLen);
-//    snprintf(out + baseLen, cap - baseLen, "_compressed.mp4");
-//}
-
 static void
 AddJob(const char* path) {
     if (gAppState.jobCount >= MAX_JOBS) {
@@ -116,30 +105,64 @@ AddJob(const char* path) {
     }
 
     UIJob* j = &gAppState.jobs[gAppState.jobCount++];
-    //memset(j, 0, sizeof(j));
     *j = UIJob{};
 
-    snprintf(j->input, sizeof(j->input), "%s", path);
-    //DeriveOutputPath(j->input, j->output, sizeof(j->output));
-
-    // TODO: strip away .mp4 and replace with suffix
-    //char* lastDot;
-    //for (char* scan; *scan; ++scan) {
-    //    if (*scan == '.') {
-    //        lastDot = scan;
-    //    }
-    //}
-
-    const char* suffix = "_compressed.mp4";
-    i32 newLength = StrLength(j->input) + StrLength(suffix);
-    ASSERT(StrLength(j->input) + StrLength(suffix) <= MAX_PATH_COUNT);
-    if (newLength > MAX_PATH_COUNT) {
-        OutputDebugStringA("Can't add job, input path is too long\n");
-    }
-
-    snprintf(j->output, sizeof(j->output), "%s%s", j->input, "_compressed.mp4");
     j->status = JobStatus::QUEUED;
     j->targetSizeMb = gAppState.savedTargetSize;
+
+    snprintf(j->input, sizeof(j->input), "%s", path);
+
+    // TODO: fix relying on MAX_PATH_COUNT inside WM_DROPFILES, so we can clean this section up
+
+    // TODO: strip away .mp4 and replace with suffix
+    // lastDot is null terminated if parameter path is
+    const char* lastDot = nullptr;
+    for (const char* scan = j->input; *scan; ++scan) {
+        if (*scan == '.') {
+            lastDot = scan;
+        }
+    }
+
+    // No file extension found...
+    // Don't fail but construct a default path without the extension
+    if (!lastDot) {
+        OutputDebugStringA("Couldn't find file extension, constructed default path!\n");
+        snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
+        char buf[2048];
+        snprintf(buf, sizeof(buf),
+                 "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
+                 gAppState.jobCount - 1, j->input, j->targetSizeMb, j->output);
+        OutputDebugStringA(buf);
+        return;
+    }
+
+    // Extra safe, probably will be never more than ~3-4 as it's standard
+    // But why not support longer ones, however it's good to have some limit at least
+    constexpr i32 maxExtensionLen = 16;
+    i32 extensionLen = StrLength(lastDot);
+    ASSERT(extensionLen <= maxExtensionLen);
+
+    // _compressed + max
+    char suffix[12 + maxExtensionLen];
+    // Extension will cut off if greater than maxExtensionLen, which is safe!
+    snprintf(suffix, sizeof(suffix), "_compressed%s", lastDot);
+
+    i32 inputLen = StrLength(j->input);
+    i32 suffixLen = StrLength(suffix);
+    i32 totalLen = inputLen + suffixLen;
+    ASSERT(totalLen <= MAX_PATH_COUNT);
+
+    char inputWithoutExtension[MAX_PATH_COUNT];
+    if (totalLen > MAX_PATH_COUNT) {
+        OutputDebugStringA("Total path length greater than MAX_PATH_COUNT, will truncate\n");
+        memcpy(inputWithoutExtension, j->input, inputLen - suffixLen);
+        inputWithoutExtension[inputLen - suffixLen] = '\0';
+    } else {
+        memcpy(inputWithoutExtension, j->input, inputLen - extensionLen);
+        inputWithoutExtension[inputLen - extensionLen] = '\0';
+    }
+
+    snprintf(j->output, sizeof(j->output), "%s%s", inputWithoutExtension, suffix);
 
     char buf[2048];
     snprintf(buf, sizeof(buf),
@@ -262,12 +285,49 @@ GetExeDirectory(PathInfo* pathInfo) {
     }
 }
 
-// TODO: allow changing output dir by explorer and manually
 static void
-OpenInExplorer(const char* path) {
+OpenInExplorer(HWND hWnd, const char* path) {
     char cmd[MAX_PATH_COUNT];
-    snprintf(cmd, sizeof(cmd), "explorer.exe /select,\"%s\"", path);
-    ShellExecuteA(NULL, "open", "explorer.exe", cmd + 13, NULL, SW_SHOWNORMAL);
+    snprintf(cmd, sizeof(cmd), "/select,\"%s\"", path);
+    ShellExecuteA(hWnd, "open", "explorer.exe", cmd, NULL, SW_SHOWNORMAL);
+}
+
+static void
+PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
+    OPENFILENAMEA ofn = {};
+    char buffer[MAX_PATH_COUNT] = {};
+
+    //// Prefill with suggested name
+    //if (defaultName) {
+    //    memcpy(buffer, defaultName, MAX_PATH_COUNT);
+    //}
+
+    ofn.lStructSize = sizeof(ofn);
+
+    ofn.hwndOwner = hWnd;
+    ofn.hInstance = hInstance;
+
+    ofn.lpstrFilter = "MP4 Video (*.mp4)\0*.mp4\0All Files\0*.*\0";
+    ofn.lpstrFile = buffer;
+    ofn.lpstrTitle = "Select output file";
+    ofn.nMaxFile = MAX_PATH_COUNT;
+    ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = "mp4";
+
+    // TODO: throws some weird exceptions via explorerframe.dll
+    // Error codes 80004001, 80070057
+    // Works correctly though
+    // TODO: consider using the more modern IFileDialog
+    // https://learn.microsoft.com/en-us/windows/win32/shell/common-file-dialog
+    // But taking a look at it, it's just so messy compared to this... (not a surprise though)
+    if (GetSaveFileNameA(&ofn)) {
+        memcpy(outPath, ofn.lpstrFile, MAX_PATH_COUNT);
+        char buf[MAX_PATH_COUNT * 2];
+        snprintf(buf, sizeof(buf), "Picked new output path: %s\n", outPath);
+        OutputDebugStringA(buf);
+    } else {
+        OutputDebugStringA("Cancelled pick output path dialog!\n");
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -316,7 +376,7 @@ ClampF32(f32 value, f32 min, f32 max) {
 }
 
 static void
-DrawUi() {
+DrawUi(HINSTANCE hInstance, HWND hWnd) {
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("EasyCompressor", nullptr,
@@ -423,7 +483,7 @@ DrawUi() {
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn(
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
-        ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
@@ -442,19 +502,37 @@ DrawUi() {
             UIJob* job = &gAppState.jobs[i];
 
             ImGui::TableSetColumnIndex(1);
-            ImGui::Selectable(job->input);
-            //ImGui::Text(job->input);
+            ImGui::Text(job->input);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 1.0f, 1.0f));
+            ImGui::Selectable(job->output);
+            ImGui::PopStyleColor();
+
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::Text("Input:\n%s", job->input);
-                ImGui::Text("Output:\n%s", job->output);
-                ImGui::Separator();
-                ImGui::Text("Click to open in explorer\n");
+                //ImGui::Text("Input:\n%s", job->input);
+                //ImGui::Text("Output:\n%s", job->output);
+                //ImGui::Separator();
+                ImGui::Text("Click to change output directory\n");
+                ImGui::Text("Right click for more options\n");
                 ImGui::EndTooltip();
             }
 
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                OpenInExplorer(job->input);
+                PickOutputPath(hInstance, hWnd, job->output);
+                // This is done to reset broken hover state after the dialog closes
+                ImGui::GetIO().ClearInputMouse();
+            } else if (ImGui::BeginPopupContextItem("job_context_menu")) {
+                if (ImGui::MenuItem("Open input in explorer...")) {
+                    OpenInExplorer(hWnd, job->input);
+                }
+
+                if (ImGui::MenuItem("Reset to default output")) {
+                    // TODO:
+                    //DeriveOutputPath(job->input, job->output, sizeof(job->output));
+                }
+
+                ImGui::EndPopup();
             }
 
             // Drag-drop reorder
@@ -569,8 +647,8 @@ CreateDeviceD3D(HWND hWnd) {
     // Setup swap chain
     // This is a basic setup. Optimally could use e.g. DXGI_SWAP_EFFECT_FLIP_DISCARD and handle
     // fullscreen mode differently. See #8979 for suggestions.
-    DXGI_SWAP_CHAIN_DESC sd;
-    ZeroMemory(&sd, sizeof(sd));
+    DXGI_SWAP_CHAIN_DESC sd = {};
+
     sd.BufferCount = 2;
     sd.BufferDesc.Width = 0;
     sd.BufferDesc.Height = 0;
@@ -640,6 +718,9 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
+        // TODO: validate by most common video file extensions
+        // FIXME: don't rely on a fixed MAX_PATH_COUNT
+        // This will solve all the problems inside AddJob
         for (i32 i = 0; i < fileCount; ++i) {
             char path[MAX_PATH_COUNT];
             DragQueryFileA(drop, i, path, sizeof(path));
@@ -786,7 +867,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        DrawUi();
+        DrawUi(hInstance, hWnd);
         ImGui::Render();
 
         //const float clearColorWithAlpha[4] = { clearColor.x * clearColor.w,
