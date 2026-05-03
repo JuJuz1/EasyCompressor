@@ -19,6 +19,7 @@
 
 #    include <windows.h>
 
+#    include <cderr.h>
 #    include <commdlg.h> // GetSaveFileNameA
 #    include <d3d11.h>
 #    include <io.h>
@@ -90,50 +91,23 @@ AddJob(const char* path) {
     }
 
     // No file extension found...
-    // Don't fail but construct a default path without the extension
-    // I think this is fine
+    // Don't fail but construct a default path without the extension but with _compressed
     if (!lastDot) {
         OutputDebugStringA("Couldn't find file extension, constructed default path!\n");
-        // TODO: edge case of input being close to MAX_PATH_COUNT
         snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
-
-        char buf[2048];
-        snprintf(buf, sizeof(buf),
-                 "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
-                 gAppState.jobCount - 1, j->input, j->targetSizeMb, j->output);
-        OutputDebugStringA(buf);
-        return;
-    }
-
-    // Extra safe, probably will be never more than ~3-4 as it's standard
-    // But why not support longer ones, however it's good to have some limit at least
-    constexpr i32 maxExtensionLen = 16;
-    i32 extensionLen = StrLength(lastDot);
-    ASSERT(extensionLen <= maxExtensionLen);
-
-    // _compressed + max
-    char suffix[12 + maxExtensionLen];
-    // Extension will cut off if greater than maxExtensionLen, which is safe!
-    snprintf(suffix, sizeof(suffix), "_compressed%s", lastDot);
-
-    i32 inputLen = StrLength(j->input);
-    i32 suffixLen = StrLength(suffix);
-    i32 totalLen = inputLen + suffixLen;
-    ASSERT(totalLen <= MAX_PATH_COUNT);
-
-    char inputWithoutExtension[MAX_PATH_COUNT];
-    if (totalLen > MAX_PATH_COUNT) {
-        OutputDebugStringA("Total path length greater than MAX_PATH_COUNT, will truncate\n");
-        memcpy(inputWithoutExtension, j->input, inputLen - suffixLen);
-        inputWithoutExtension[inputLen - suffixLen] = '\0';
     } else {
-        memcpy(inputWithoutExtension, j->input, inputLen - extensionLen);
-        inputWithoutExtension[inputLen - extensionLen] = '\0';
+        i32 extensionLen = StrLength(lastDot);
+        i32 inputLen = StrLength(j->input);
+        i32 baseLen = inputLen - extensionLen; // Without extension
+
+        char base[MAX_PATH_COUNT];
+        memcpy(base, j->input, baseLen);
+        base[baseLen] = '\0';
+
+        snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
     }
 
-    snprintf(j->output, sizeof(j->output), "%s%s", inputWithoutExtension, suffix);
-
-    char buf[2048];
+    char buf[(MAX_PATH_COUNT * 2) + 256];
     snprintf(buf, sizeof(buf),
              "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
              gAppState.jobCount - 1, j->input, j->targetSizeMb, j->output);
@@ -290,7 +264,20 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         snprintf(buf, sizeof(buf), "Picked new output path: %s\n", outPath);
         OutputDebugStringA(buf);
     } else {
-        OutputDebugStringA("Cancelled pick output path dialog!\n");
+        DWORD err = CommDlgExtendedError();
+        char buf[64];
+        snprintf(buf, sizeof(buf), "CommDlgExtendedError in PickOutputPath: %u\n", err);
+        OutputDebugStringA(buf);
+
+        if (err == FNERR_BUFFERTOOSMALL) {
+            OutputDebugStringA("Buffer too small for output path!\n");
+            return;
+        } else if (err == FNERR_INVALIDFILENAME) {
+            OutputDebugStringA("Invalid file name for output path!\n");
+            // TODO: handle?
+        } else {
+            OutputDebugStringA("Cancelled pick output path dialog!\n");
+        }
     }
 }
 
@@ -689,9 +676,25 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // TODO: validate by most common video file extensions
         for (i32 i = 0; i < fileCount; ++i) {
             char path[MAX_PATH_COUNT];
+            char buf[MAX_PATH_COUNT + 128];
+            // Query the required character amount first, not including null terminator
+            // If we don't query we have no way of deducing if the path was truncated or it's
+            // exactly MAX_PATH_COUNT long
+            UINT required = DragQueryFileA(drop, i, nullptr, 0);
+            snprintf(buf, sizeof(buf), "Required %d (not including null terminator)\n", required);
+            OutputDebugStringA(buf);
+
+            // Get the path and get the copied amount, not including null terminator
             UINT copied = DragQueryFileA(drop, i, path, sizeof(path));
-            if (copied > sizeof(path)) {
-                OutputDebugStringA("Path was truncated, didn't add job!\n");
+            snprintf(buf, sizeof(buf), "Copied %d (not including null terminator)\n", copied);
+            OutputDebugStringA(buf);
+
+            if (required >= sizeof(path)) {
+                snprintf(buf, sizeof(buf),
+                         "Path was truncated, didn't add job!\nPath would have been %s\n", path);
+                OutputDebugStringA(buf);
+                // TODO: show error for user for discarded files
+                continue;
             }
 
             AddJob(path);

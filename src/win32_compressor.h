@@ -1,6 +1,6 @@
 #pragma once
 
-// Has to be enough
+// Has to be enough, including null terminator
 #define MAX_PATH_COUNT 2048
 
 struct PathInfo {
@@ -17,7 +17,7 @@ enum JobStatus : u8 {
 
 struct UIJob {
     char input[MAX_PATH_COUNT];
-    char output[MAX_PATH_COUNT];
+    char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
     float targetSizeMb;
     volatile long status;      // JobStatus, written across threads via Interlocked*
     volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
