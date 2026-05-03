@@ -159,63 +159,134 @@ RemoveJob(AppState* appState, i32 index) {
 // -----------------------------------------------------------------------------
 
 static unsigned __stdcall
-WorkerThread(AppState* appState, void*) {
+WorkerThread(void* param) {
+    AppState* appState = static_cast<AppState*>(param);
+
     for (i32 i = 0; i < appState->jobCount; ++i) {
-        if (InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
-            break;
+        //if (InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
+        //    break;
+        //}
+
+        UIJob* job = &appState->jobs[i];
+        job->status = JobStatus::RUNNING_PROBE;
+
+        SECURITY_ATTRIBUTES sa = {};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+
+        HANDLE readPipe = nullptr;
+        HANDLE writePipe = nullptr;
+
+        if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+            OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            _InterlockedExchange(&appState->workerRunning, 0);
+            return 0;
         }
 
-        InterlockedExchange(&appState->jobs[i].status, JobStatus::RUNNING);
+        SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        //CompressorParams params = {};
-        //params.ffmpegPath = appState->ffmpegPath;
-        //params.input = appState->jobs[i].input;
-        //params.output = appState->jobs[i].output;
-        //params.targetSizeMb = appState->jobs[i].targetSizeMb;
+        char cmd[(MAX_PATH_COUNT * 2) + 128];
+        snprintf(cmd, sizeof(cmd),
+                 "\"%sffprobe.exe\" -v error -show_entries format=duration "
+                 "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
+                 appState->ffmpegPath, job->input);
 
-        // NOTE: hot-reload check belongs HERE (between jobs), never during one.
-        // if (DllChangedOnDisk()) ReloadCompressorCode(&appState->compress, ...);
+        STARTUPINFOA si = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = writePipe;
+        si.hStdError = writePipe;
 
-        //if (appState->compress) {
-        //appState->compress(&appState->memory, &params);
-        //Compress();
-        InterlockedExchange(&appState->jobs[i].status, JobStatus::DONE);
-        //}
-        //else {
-        //    InterlockedExchange(&appState->jobs[i].status, static_cast<i32>(JobStatus::ERROR));
-        //}
+        PROCESS_INFORMATION pi = {};
+
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
+        OutputDebugStringA(buf);
+        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
+                                      TRUE, // inherit handles!
+                                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+        CloseHandle(writePipe);
+
+        if (!created) {
+            OutputDebugStringA("Couldn't create process ffprobe! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            CloseHandle(readPipe);
+            _InterlockedExchange(&appState->workerRunning, 0);
+            return 0;
+        }
+
+        // Read output
+        char buffer[256] = {};
+        DWORD bytesRead = 0;
+
+        char output[256] = {};
+        DWORD totalRead = 0;
+
+        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+               bytesRead > 0) {
+            if (totalRead + bytesRead < sizeof(output)) {
+                memcpy(output + totalRead, buffer, bytesRead);
+                totalRead += bytesRead;
+            } else {
+                OutputDebugStringA("No space in buffer for ffprobe output!\n");
+            }
+        }
+
+        CloseHandle(readPipe);
+
+        OutputDebugStringA("Waiting for ffprobe...\n");
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        OutputDebugStringA("ffprobe finished\n");
+
+        DWORD exitCode = 0;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        if (exitCode == 0) {
+            // Parse duration
+            job->durationSeconds = static_cast<f32>(atof(output));
+
+            //job->progressPct = 100;
+
+            job->status = JobStatus::DONE_PROBE;
+        } else {
+            job->status = JobStatus::ERROR;
+        }
     }
 
-    InterlockedExchange(&appState->workerRunning, 0);
+    _InterlockedExchange(&appState->workerRunning, 0);
+
     return 0;
 }
 
+// TODO: probing should be run automatically when a file is added, seems like the best workflow
 static void
 StartBatch(AppState* appState) {
-    OutputDebugStringA("Start batch\n");
-    for (i32 i = 0; i < appState->jobCount; ++i) {
-        appState->jobs[i].status = JobStatus::RUNNING;
+    if (appState->jobCount == 0) {
+        return;
     }
 
-    //if (InterlockedCompareExchange(&appState->workerRunning, 1, 0) != 0) {
-    //    return; // already running
-    //}
+    if (_InterlockedCompareExchange(&appState->workerRunning, 1, 0) != 0) {
+        return;
+    }
 
-    //InterlockedExchange(&appState->cancelRequested, 0);
-    //for (int i = 0; i < appState->jobCount; ++i) {
-    //    InterlockedExchange(&appState->jobs[i].status, static_cast<i32>(JobStatus::QUEUED));
-    //}
+    OutputDebugStringA("Start batch\n");
 
-    //appState->workerThread = (HANDLE)_beginthreadex(nullptr, 0, WorkerThread, nullptr, 0,
-    //nullptr);
+    //_InterlockedExchange(&appState->cancelRequested, 0);
+    appState->workerThread =
+        reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, WorkerThread, appState, 0, nullptr));
 }
 
 static void
-GetExeDirectory(PathInfo* pathInfo) {
-    GetModuleFileNameA(0, pathInfo->exeDir, sizeof(pathInfo->exeDir));
+GetExeDirectory(AppState* appState) {
+    GetModuleFileNameA(0, appState->exeDir, sizeof(appState->exeDir));
 
     i32 lastSlashIndex = -1;
-    char* scan = pathInfo->exeDir;
+    char* scan = appState->exeDir;
     for (i32 i = 0; *scan; ++scan, ++i) {
         if (*scan == PATH_SEP) {
             lastSlashIndex = i;
@@ -223,7 +294,7 @@ GetExeDirectory(PathInfo* pathInfo) {
     }
 
     if (lastSlashIndex >= 0) {
-        pathInfo->exeDir[lastSlashIndex + 1] = '\0';
+        appState->exeDir[lastSlashIndex + 1] = '\0';
     }
 }
 
@@ -248,7 +319,8 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     ofn.lpstrFile = buffer;
     ofn.lpstrTitle = "Select output file";
     ofn.nMaxFile = MAX_PATH_COUNT;
-    ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    // NOCHANGE_DIR to prevent generating imgui.ini
+    ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
     ofn.lpstrDefExt = "mp4";
 
     // TODO: throws some weird exceptions via explorerframe.dll
@@ -290,10 +362,14 @@ StatusText(JobStatus s) {
     switch (s) {
     case JobStatus::QUEUED:
         return "Queued";
-    case JobStatus::RUNNING:
-        return "Running";
-    case JobStatus::DONE:
-        return "Done";
+    case JobStatus::RUNNING_PROBE:
+        return "Running probe";
+    case JobStatus::DONE_PROBE:
+        return "Done probe";
+    case JobStatus::RUNNING_COMPRESS:
+        return "Running compress";
+    case JobStatus::DONE_COMPRESS:
+        return "Done compress";
     case JobStatus::ERROR:
         return "Error";
     }
@@ -309,7 +385,7 @@ SetTargetSizeForAll(AppState* appState, f32 targetSize) {
 
     for (i32 i = 0; i < appState->jobCount; ++i) {
         UIJob* job = &appState->jobs[i];
-        if (job->status != JobStatus::RUNNING) {
+        if (job->status != JobStatus::RUNNING_PROBE && job->status != JobStatus::RUNNING_COMPRESS) {
             job->targetSizeMb = targetSize;
         }
     }
@@ -403,9 +479,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         *defaultTargetSize = 50.0f;
     }
 
-    //bool busy = InterlockedCompareExchange(&appState->workerRunning, 0, 0) != 0;
+    bool32 workerThreadRunning = _InterlockedCompareExchange(&appState->workerRunning, 0, 0) != 0;
     // TODO: necessary or no?
-    bool32 busy = false;
+    //bool32 busy = false;
 
     /// Table
 
@@ -416,7 +492,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 60);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 120);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
@@ -424,13 +500,15 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         i32 removeIndex = -1;
 
         for (i32 i = 0; i < appState->jobCount; ++i) {
+            UIJob* job = &appState->jobs[i];
+            bool32 jobRunning = job->status == JobStatus::RUNNING_PROBE ||
+                                job->status == JobStatus::RUNNING_COMPRESS;
+
             ImGui::PushID(i);
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
             ImGui::Text("%d", i + 1);
-
-            UIJob* job = &appState->jobs[i];
 
             ImGui::TableSetColumnIndex(1);
             ImGui::Text(job->input);
@@ -458,16 +536,17 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                     OpenInExplorer(hWnd, job->input);
                 }
 
-                if (ImGui::MenuItem("Reset to default output")) {
-                    // TODO:
-                    //DeriveOutputPath(job->input, job->output, sizeof(job->output));
-                }
+                // TODO: ?
+                //if (ImGui::MenuItem("Reset to default output")) {
+                //DeriveOutputPath(job->input, job->output, sizeof(job->output));
+                //}
 
                 ImGui::EndPopup();
             }
 
             // Drag-drop reorder
-            //if (!busy && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+            //if (!busy && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover))
+            //{
             //    ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(int));
             //    ImGui::Text("Move %s", appState->jobs[i].input);
             //    ImGui::EndDragDropSource();
@@ -494,11 +573,16 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             *targetSize = ClampF32(*targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
             ImGui::TableSetColumnIndex(3);
-            ImGui::TextUnformatted(StatusText(static_cast<JobStatus>(
-                InterlockedCompareExchange(&appState->jobs[i].status, 0, 0))));
+            // TODO: just show for debugging
+            const char* statusText = StatusText(static_cast<JobStatus>(job->status));
+            if (job->status == JobStatus::DONE_PROBE) {
+                ImGui::Text("%s: %.2f s", statusText, job->durationSeconds);
+            } else {
+                ImGui::TextUnformatted(statusText);
+            }
 
             ImGui::TableSetColumnIndex(4);
-            ImGui::BeginDisabled(job->status == JobStatus::RUNNING);
+            ImGui::BeginDisabled(jobRunning);
             if (ImGui::SmallButton("X")) {
                 removeIndex = i;
             }
@@ -518,7 +602,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         }
     }
 
-    ImGui::BeginDisabled(busy || appState->jobCount == 0);
+    ImGui::BeginDisabled(workerThreadRunning || appState->jobCount == 0);
     if (ImGui::Button("Start", ImVec2(100, 0))) {
         StartBatch(appState);
     }
@@ -534,7 +618,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     //ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(busy || appState->jobCount == 0);
+    ImGui::BeginDisabled(workerThreadRunning || appState->jobCount == 0);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
         OutputDebugStringA("Clear\n");
         appState->jobCount = 0;
@@ -629,8 +713,8 @@ CreateDeviceD3D(HWND hWnd) {
     HRESULT res = D3D11CreateDeviceAndSwapChain(
         nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2,
         D3D11_SDK_VERSION, &sd, &gSwap, &gDevice, &featureLevel, &gContext);
-    if (res == DXGI_ERROR_UNSUPPORTED) { // Try high-performance WARP software driver if hardware is
-                                         // not available.
+    if (res == DXGI_ERROR_UNSUPPORTED) { // Try high-performance WARP software driver if
+                                         // hardware is not available.
         res = D3D11CreateDeviceAndSwapChain(
             nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2,
             D3D11_SDK_VERSION, &sd, &gSwap, &gDevice, &featureLevel, &gContext);
@@ -695,10 +779,10 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
             // required > copied would work as well
             if (required >= sizeof(path)) {
-                snprintf(
-                    buf, sizeof(buf),
-                    "Path was truncated, didn't add job! Max length: %d\nPath would have been %s\n",
-                    MAX_PATH_COUNT, path);
+                snprintf(buf, sizeof(buf),
+                         "Path was truncated, didn't add job! Max length: %d\nPath would have "
+                         "been %s\n",
+                         MAX_PATH_COUNT, path);
                 OutputDebugStringA(buf);
                 // TODO: show error for user for discarded files
                 continue;
@@ -769,14 +853,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         return 0;
     }
 
-    PathInfo pathInfo = { 0 };
-    GetExeDirectory(&pathInfo);
-    //GetFFMpegPath(&pathInfo);
-
-    // TODO: support package managers so read from PATH
-    //char ffmpegPath[64];
-    //snprintf(ffmpegPath, sizeof(ffmpegPath), "vendor%cffmpeg%c", PATH_SEP, PATH_SEP);
-
     ////////////////////////////////////////////////////////////
 
     DragAcceptFiles(hWnd, TRUE); // <-- enables WM_DROPFILES
@@ -796,17 +872,24 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     AppState appState = {};
+    //GetFFMpegPath(&pathInfo);
+
     appState.defaultTargetSize = DEFAULT_TARGET_SIZE;
     gAppState = &appState;
+
+    // TODO: support package managers so read from PATH
+    snprintf(appState.ffmpegPath, sizeof(appState.ffmpegPath), "vendor\\ffmpeg\\");
 
     // Test data
 #if COMPRESSOR_INTERNAL
     OutputDebugStringA("Adding test files at startup...\n");
+    GetExeDirectory(&appState);
+
     char testPath1[MAX_PATH_COUNT];
     char testPath2[MAX_PATH_COUNT];
 
-    snprintf(testPath1, sizeof(testPath1), "%s..\\test_file1_large.mp4", pathInfo.exeDir);
-    snprintf(testPath2, sizeof(testPath2), "%s..\\test_file2.mp4", pathInfo.exeDir);
+    snprintf(testPath1, sizeof(testPath1), "%s..\\test_file1_large.mp4", appState.exeDir);
+    snprintf(testPath2, sizeof(testPath2), "%s..\\test_file2.mp4", appState.exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);

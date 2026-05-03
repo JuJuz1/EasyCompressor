@@ -3,24 +3,23 @@
 // Has to be enough, including null terminator
 #define MAX_PATH_COUNT 2048
 
-struct PathInfo {
-    char exeDir[MAX_PATH_COUNT]; // Absolute path to the exe directory
-    char ffmpegPath[MAX_PATH_COUNT];
-};
-
 enum JobStatus : u8 {
     QUEUED = 0,
-    RUNNING,
-    DONE,
+    RUNNING_PROBE,
+    DONE_PROBE,
+    RUNNING_COMPRESS,
+    DONE_COMPRESS,
     ERROR
 };
 
 struct UIJob {
     char input[MAX_PATH_COUNT];
     char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
-    float targetSizeMb;
+    f32 targetSizeMb;
     volatile long status;      // JobStatus, written across threads via Interlocked*
     volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
+
+    f32 durationSeconds; // Probed from the video before compression (2-pass)
 };
 
 #define MAX_JOBS 10
@@ -45,4 +44,15 @@ struct AppState {
 
     // All UI state with ImGui
     UIState uiState;
+
+    char exeDir[MAX_PATH_COUNT]; // Absolute path to the exe directory
+    char ffmpegPath[MAX_PATH_COUNT];
+};
+
+struct FFmpegParams {
+    const char* ffmpegPath;
+    const char* input;
+    const char* output;
+
+    f32 targetSizeMb;
 };
