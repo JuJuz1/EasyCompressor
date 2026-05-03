@@ -27,6 +27,19 @@
 #    include <stdio.h>
 #    include <tchar.h>
 
+// Windows...
+#    ifdef ERROR
+#        undef ERROR
+#    endif
+
+#    ifdef max
+#        undef max
+#    endif
+
+#    ifdef min
+#        undef min
+#    endif
+
 #endif
 
 #include "imgui_draw.cpp"
@@ -52,49 +65,6 @@
 // Queue model
 // -----------------------------------------------------------------------------
 
-// Windows...
-#ifdef ERROR
-#    undef ERROR
-#endif
-
-enum JobStatus : u8 {
-    QUEUED = 0,
-    RUNNING,
-    DONE,
-    ERROR
-};
-
-struct UIJob {
-    char input[MAX_PATH_COUNT];
-    char output[MAX_PATH_COUNT];
-    float targetSizeMb;
-    volatile long status;      // JobStatus, written across threads via Interlocked*
-    volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
-};
-
-#define MAX_JOBS 10
-
-// All in MB
-#define DEFAULT_TARGET_SIZE 10.0f
-#define MIN_TARGET_SIZE 0.5f
-#define MAX_TARGET_SIZE 5000.0f
-
-struct AppState {
-    UIJob jobs[MAX_JOBS];
-    i32 jobCount;
-    volatile long workerRunning; // 0/1
-    volatile long cancelRequested;
-    HANDLE workerThread;
-
-    // compressor DLL handles (your existing CompressorCode, simplified here)
-    //compressor_impl* compress = nullptr;
-    //Memory memory = {};
-    char ffmpegPath[64];
-
-    f32 globalTargetSize; // The global for all targets
-    f32 savedTargetSize;  // The added job will have this target size
-};
-
 static AppState gAppState;
 
 static void
@@ -108,14 +78,10 @@ AddJob(const char* path) {
     *j = UIJob{};
 
     j->status = JobStatus::QUEUED;
-    j->targetSizeMb = gAppState.savedTargetSize;
+    j->targetSizeMb = gAppState.defaultTargetSize;
 
     snprintf(j->input, sizeof(j->input), "%s", path);
 
-    // TODO: fix relying on MAX_PATH_COUNT inside WM_DROPFILES, so we can clean this section up
-
-    // TODO: strip away .mp4 and replace with suffix
-    // lastDot is null terminated if parameter path is
     const char* lastDot = nullptr;
     for (const char* scan = j->input; *scan; ++scan) {
         if (*scan == '.') {
@@ -125,9 +91,12 @@ AddJob(const char* path) {
 
     // No file extension found...
     // Don't fail but construct a default path without the extension
+    // I think this is fine
     if (!lastDot) {
         OutputDebugStringA("Couldn't find file extension, constructed default path!\n");
+        // TODO: edge case of input being close to MAX_PATH_COUNT
         snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
+
         char buf[2048];
         snprintf(buf, sizeof(buf),
                  "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
@@ -297,11 +266,6 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     OPENFILENAMEA ofn = {};
     char buffer[MAX_PATH_COUNT] = {};
 
-    //// Prefill with suggested name
-    //if (defaultName) {
-    //    memcpy(buffer, defaultName, MAX_PATH_COUNT);
-    //}
-
     ofn.lStructSize = sizeof(ofn);
 
     ofn.hwndOwner = hWnd;
@@ -322,7 +286,7 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     // But taking a look at it, it's just so messy compared to this... (not a surprise though)
     if (GetSaveFileNameA(&ofn)) {
         memcpy(outPath, ofn.lpstrFile, MAX_PATH_COUNT);
-        char buf[MAX_PATH_COUNT * 2];
+        char buf[MAX_PATH_COUNT + 32];
         snprintf(buf, sizeof(buf), "Picked new output path: %s\n", outPath);
         OutputDebugStringA(buf);
     } else {
@@ -366,6 +330,7 @@ SetTargetSizeForAll(f32 targetSize) {
 
 static f32
 ClampF32(f32 value, f32 min, f32 max) {
+    ASSERT(min <= max);
     if (value < min) {
         return min;
     } else if (value > max) {
@@ -377,6 +342,8 @@ ClampF32(f32 value, f32 min, f32 max) {
 
 static void
 DrawUi(HINSTANCE hInstance, HWND hWnd) {
+    UIState* uiState = &gAppState.uiState;
+
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("EasyCompressor", nullptr,
@@ -398,6 +365,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
 
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("About")) {
+                uiState->helpAboutClicked = true;
                 OutputDebugStringA("About clicked\n");
             }
 
@@ -414,62 +382,38 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
 
     const i32 sliderWidth = 190;
 
-    // TODO: allow user supplied via a config file?
-    ImGui::Text("Change target size for ALL files:");
-    f32 newGlobalTargetSize = gAppState.globalTargetSize;
+    /// Default target size
+
+    ImGui::Text("Default target size:");
+    f32* defaultTargetSize = &gAppState.defaultTargetSize;
     ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::SliderFloat("##mb_slider_global", &newGlobalTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
+    ImGui::SliderFloat("##mb_slider_default", defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                        "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
-    ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::InputFloat("##mb_input_global", &newGlobalTargetSize, 0.0f, 0.0f, "%.3f MB");
-    newGlobalTargetSize = ClampF32(newGlobalTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
-
-    if (ImGui::Button("5 MB##global", ImVec2(80, 0))) {
-        newGlobalTargetSize = 5.0f;
-    }
-
     ImGui::SameLine();
-    if (ImGui::Button("10 MB##global", ImVec2(80, 0))) {
-        newGlobalTargetSize = 10.0f;
+    ImGui::BeginDisabled(gAppState.jobCount == 0);
+    if (ImGui::Button("Apply to all files")) {
+        SetTargetSizeForAll(gAppState.defaultTargetSize);
     }
 
-    ImGui::SameLine();
-    if (ImGui::Button("50 MB##global", ImVec2(80, 0))) {
-        newGlobalTargetSize = 50.0f;
-    }
-
-    if (newGlobalTargetSize != gAppState.globalTargetSize) {
-        gAppState.globalTargetSize = newGlobalTargetSize;
-        SetTargetSizeForAll(newGlobalTargetSize);
-    }
-
-    ImGui::Separator();
-
-    /// Saved target size
-
-    ImGui::Text("Saved target size:");
-    f32* savedTargetSize = &gAppState.savedTargetSize;
-    ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::SliderFloat("##mb_slider_saved", savedTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
-                       "%.1f MB", ImGuiSliderFlags_Logarithmic);
+    ImGui::EndDisabled();
 
     ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::InputFloat("##mb_input_saved", savedTargetSize, 0.0f, 0.0f, "%.3f MB");
-    *savedTargetSize = ClampF32(*savedTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
+    ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.3f MB");
+    *defaultTargetSize = ClampF32(*defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
-    if (ImGui::Button("5 MB##saved", ImVec2(80, 0))) {
-        *savedTargetSize = 5.0f;
+    if (ImGui::Button("5 MB##default", ImVec2(80, 0))) {
+        *defaultTargetSize = 5.0f;
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("10 MB##saved", ImVec2(80, 0))) {
-        *savedTargetSize = 10.0f;
+    if (ImGui::Button("10 MB##default", ImVec2(80, 0))) {
+        *defaultTargetSize = 10.0f;
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("50 MB##saved", ImVec2(80, 0))) {
-        *savedTargetSize = 50.0f;
+    if (ImGui::Button("50 MB##default", ImVec2(80, 0))) {
+        *defaultTargetSize = 50.0f;
     }
 
     //bool busy = InterlockedCompareExchange(&gAppState.workerRunning, 0, 0) != 0;
@@ -504,7 +448,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
             ImGui::TableSetColumnIndex(1);
             ImGui::Text(job->input);
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
             ImGui::Selectable(job->output);
             ImGui::PopStyleColor();
 
@@ -573,7 +517,6 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
             }
 
             ImGui::EndDisabled();
-
             ImGui::PopID();
         }
 
@@ -589,7 +532,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
     }
 
     ImGui::BeginDisabled(busy || gAppState.jobCount == 0);
-    if (ImGui::Button("Start", ImVec2(120, 0))) {
+    if (ImGui::Button("Start", ImVec2(100, 0))) {
         StartBatch();
     }
 
@@ -612,6 +555,31 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
 
     ImGui::EndDisabled();
     ImGui::End();
+
+    /// ImGui::End()
+    // We have to do popup stuff here
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
+                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoCollapse)) {
+        ImGui::Text("EasyCompressor");
+        ImGui::Separator();
+        ImGui::Text("Built with ImGui");
+        ImGui::Text("Max path length for input/output paths is: %d", MAX_PATH_COUNT);
+
+        if (ImGui::Button("OK")) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    if (uiState->helpAboutClicked) {
+        ImGui::OpenPopup("HelpAboutPopup");
+        uiState->helpAboutClicked = false;
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -719,11 +687,13 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
         // TODO: validate by most common video file extensions
-        // FIXME: don't rely on a fixed MAX_PATH_COUNT
-        // This will solve all the problems inside AddJob
         for (i32 i = 0; i < fileCount; ++i) {
             char path[MAX_PATH_COUNT];
-            DragQueryFileA(drop, i, path, sizeof(path));
+            UINT copied = DragQueryFileA(drop, i, path, sizeof(path));
+            if (copied > sizeof(path)) {
+                OutputDebugStringA("Path was truncated, didn't add job!\n");
+            }
+
             AddJob(path);
         }
 
@@ -815,8 +785,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    gAppState.savedTargetSize = DEFAULT_TARGET_SIZE;
-    gAppState.globalTargetSize = DEFAULT_TARGET_SIZE;
+    gAppState.defaultTargetSize = DEFAULT_TARGET_SIZE;
 
     // Test data
 #if COMPRESSOR_INTERNAL

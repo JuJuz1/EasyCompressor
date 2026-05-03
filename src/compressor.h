@@ -1,5 +1,9 @@
 #pragma once
 
+/*
+    Platform independent stuff here used for possible porting
+*/
+
 #include <stddef.h> // size_t
 #include <stdint.h> // common types
 
