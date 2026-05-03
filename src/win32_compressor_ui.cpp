@@ -60,26 +60,25 @@
 #include "compressor.h"
 
 #include "win32_compressor.h"
+
 //}
 
 // -----------------------------------------------------------------------------
 // Queue model
 // -----------------------------------------------------------------------------
 
-static AppState gAppState;
-
 static void
-AddJob(const char* path) {
-    if (gAppState.jobCount >= MAX_JOBS) {
+AddJob(AppState* appState, const char* path) {
+    if (appState->jobCount >= MAX_JOBS) {
         OutputDebugStringA("Jobs full!\n");
         return;
     }
 
-    UIJob* j = &gAppState.jobs[gAppState.jobCount++];
+    UIJob* j = &appState->jobs[appState->jobCount++];
     *j = UIJob{};
 
     j->status = JobStatus::QUEUED;
-    j->targetSizeMb = gAppState.defaultTargetSize;
+    j->targetSizeMb = appState->defaultTargetSize;
 
     snprintf(j->input, sizeof(j->input), "%s", path);
 
@@ -110,14 +109,14 @@ AddJob(const char* path) {
     char buf[(MAX_PATH_COUNT * 2) + 256];
     snprintf(buf, sizeof(buf),
              "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
-             gAppState.jobCount - 1, j->input, j->targetSizeMb, j->output);
+             appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
     OutputDebugStringA(buf);
 }
 
 static void
-RemoveJob(i32 index) {
-    ASSERT(index >= 0 && index < gAppState.jobCount);
-    if (index < 0 || index >= gAppState.jobCount) {
+RemoveJob(AppState* appState, i32 index) {
+    ASSERT(index >= 0 && index < appState->jobCount);
+    if (index < 0 || index >= appState->jobCount) {
         // bad!
         return;
     }
@@ -126,32 +125,32 @@ RemoveJob(i32 index) {
     snprintf(buf, sizeof(buf), "Removed job %d\n", index);
     OutputDebugStringA(buf);
 
-    for (i32 i = index; i < gAppState.jobCount - 1; ++i) {
-        gAppState.jobs[i] = gAppState.jobs[i + 1];
+    for (i32 i = index; i < appState->jobCount - 1; ++i) {
+        appState->jobs[i] = appState->jobs[i + 1];
     }
 
-    gAppState.jobCount--;
+    appState->jobCount--;
 }
 
 //static void
 //MoveJob(int from, int to) {
-//    if (from == to || from < 0 || to < 0 || from >= gAppState.jobCount ||
-//        to >= gAppState.jobCount) {
+//    if (from == to || from < 0 || to < 0 || from >= appState->jobCount ||
+//        to >= appState->jobCount) {
 //        return;
 //    }
 
-//    UIJob tmp = gAppState.jobs[from];
+//    UIJob tmp = appState->jobs[from];
 //    if (from < to) {
 //        for (int i = from; i < to; ++i) {
-//            gAppState.jobs[i] = gAppState.jobs[i + 1];
+//            appState->jobs[i] = appState->jobs[i + 1];
 //        }
 //    } else {
 //        for (int i = from; i > to; --i) {
-//            gAppState.jobs[i] = gAppState.jobs[i - 1];
+//            appState->jobs[i] = appState->jobs[i - 1];
 //        }
 //    }
 
-//    gAppState.jobs[to] = tmp;
+//    appState->jobs[to] = tmp;
 //}
 
 // -----------------------------------------------------------------------------
@@ -160,54 +159,54 @@ RemoveJob(i32 index) {
 // -----------------------------------------------------------------------------
 
 static unsigned __stdcall
-WorkerThread(void*) {
-    for (i32 i = 0; i < gAppState.jobCount; ++i) {
-        if (InterlockedCompareExchange(&gAppState.cancelRequested, 0, 0)) {
+WorkerThread(AppState* appState, void*) {
+    for (i32 i = 0; i < appState->jobCount; ++i) {
+        if (InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
             break;
         }
 
-        InterlockedExchange(&gAppState.jobs[i].status, JobStatus::RUNNING);
+        InterlockedExchange(&appState->jobs[i].status, JobStatus::RUNNING);
 
         //CompressorParams params = {};
-        //params.ffmpegPath = gAppState.ffmpegPath;
-        //params.input = gAppState.jobs[i].input;
-        //params.output = gAppState.jobs[i].output;
-        //params.targetSizeMb = gAppState.jobs[i].targetSizeMb;
+        //params.ffmpegPath = appState->ffmpegPath;
+        //params.input = appState->jobs[i].input;
+        //params.output = appState->jobs[i].output;
+        //params.targetSizeMb = appState->jobs[i].targetSizeMb;
 
         // NOTE: hot-reload check belongs HERE (between jobs), never during one.
-        // if (DllChangedOnDisk()) ReloadCompressorCode(&gAppState.compress, ...);
+        // if (DllChangedOnDisk()) ReloadCompressorCode(&appState->compress, ...);
 
-        //if (gAppState.compress) {
-        //gAppState.compress(&gAppState.memory, &params);
+        //if (appState->compress) {
+        //appState->compress(&appState->memory, &params);
         //Compress();
-        InterlockedExchange(&gAppState.jobs[i].status, JobStatus::DONE);
+        InterlockedExchange(&appState->jobs[i].status, JobStatus::DONE);
         //}
         //else {
-        //    InterlockedExchange(&gAppState.jobs[i].status, static_cast<i32>(JobStatus::ERROR));
+        //    InterlockedExchange(&appState->jobs[i].status, static_cast<i32>(JobStatus::ERROR));
         //}
     }
 
-    InterlockedExchange(&gAppState.workerRunning, 0);
+    InterlockedExchange(&appState->workerRunning, 0);
     return 0;
 }
 
 static void
-StartBatch() {
+StartBatch(AppState* appState) {
     OutputDebugStringA("Start batch\n");
-    for (i32 i = 0; i < gAppState.jobCount; ++i) {
-        gAppState.jobs[i].status = JobStatus::RUNNING;
+    for (i32 i = 0; i < appState->jobCount; ++i) {
+        appState->jobs[i].status = JobStatus::RUNNING;
     }
 
-    //if (InterlockedCompareExchange(&gAppState.workerRunning, 1, 0) != 0) {
+    //if (InterlockedCompareExchange(&appState->workerRunning, 1, 0) != 0) {
     //    return; // already running
     //}
 
-    //InterlockedExchange(&gAppState.cancelRequested, 0);
-    //for (int i = 0; i < gAppState.jobCount; ++i) {
-    //    InterlockedExchange(&gAppState.jobs[i].status, static_cast<i32>(JobStatus::QUEUED));
+    //InterlockedExchange(&appState->cancelRequested, 0);
+    //for (int i = 0; i < appState->jobCount; ++i) {
+    //    InterlockedExchange(&appState->jobs[i].status, static_cast<i32>(JobStatus::QUEUED));
     //}
 
-    //gAppState.workerThread = (HANDLE)_beginthreadex(nullptr, 0, WorkerThread, nullptr, 0,
+    //appState->workerThread = (HANDLE)_beginthreadex(nullptr, 0, WorkerThread, nullptr, 0,
     //nullptr);
 }
 
@@ -270,6 +269,7 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         OutputDebugStringA(buf);
 
         if (err == FNERR_BUFFERTOOSMALL) {
+            // TODO: show errors for user here also
             OutputDebugStringA("Buffer too small for output path!\n");
             return;
         } else if (err == FNERR_INVALIDFILENAME) {
@@ -302,13 +302,13 @@ StatusText(JobStatus s) {
 }
 
 static void
-SetTargetSizeForAll(f32 targetSize) {
+SetTargetSizeForAll(AppState* appState, f32 targetSize) {
     char buf[128];
     snprintf(buf, sizeof(buf), "Set target size for all %.2f MB\n", targetSize);
     OutputDebugStringA(buf);
 
-    for (i32 i = 0; i < gAppState.jobCount; ++i) {
-        UIJob* job = &gAppState.jobs[i];
+    for (i32 i = 0; i < appState->jobCount; ++i) {
+        UIJob* job = &appState->jobs[i];
         if (job->status != JobStatus::RUNNING) {
             job->targetSizeMb = targetSize;
         }
@@ -328,8 +328,8 @@ ClampF32(f32 value, f32 min, f32 max) {
 }
 
 static void
-DrawUi(HINSTANCE hInstance, HWND hWnd) {
-    UIState* uiState = &gAppState.uiState;
+DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
+    UIState* uiState = &appState->uiState;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
@@ -372,15 +372,15 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
     /// Default target size
 
     ImGui::Text("Default target size:");
-    f32* defaultTargetSize = &gAppState.defaultTargetSize;
+    f32* defaultTargetSize = &appState->defaultTargetSize;
     ImGui::SetNextItemWidth(sliderWidth);
     ImGui::SliderFloat("##mb_slider_default", defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                        "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(gAppState.jobCount == 0);
+    ImGui::BeginDisabled(appState->jobCount == 0);
     if (ImGui::Button("Apply to all files")) {
-        SetTargetSizeForAll(gAppState.defaultTargetSize);
+        SetTargetSizeForAll(appState, *defaultTargetSize);
     }
 
     ImGui::EndDisabled();
@@ -403,7 +403,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
         *defaultTargetSize = 50.0f;
     }
 
-    //bool busy = InterlockedCompareExchange(&gAppState.workerRunning, 0, 0) != 0;
+    //bool busy = InterlockedCompareExchange(&appState->workerRunning, 0, 0) != 0;
     // TODO: necessary or no?
     bool32 busy = false;
 
@@ -423,14 +423,14 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
         //i32 moveFrom = -1, moveTo = -1, removeIdx = -1;
         i32 removeIndex = -1;
 
-        for (i32 i = 0; i < gAppState.jobCount; ++i) {
+        for (i32 i = 0; i < appState->jobCount; ++i) {
             ImGui::PushID(i);
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
             ImGui::Text("%d", i + 1);
 
-            UIJob* job = &gAppState.jobs[i];
+            UIJob* job = &appState->jobs[i];
 
             ImGui::TableSetColumnIndex(1);
             ImGui::Text(job->input);
@@ -469,7 +469,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
             // Drag-drop reorder
             //if (!busy && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
             //    ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(int));
-            //    ImGui::Text("Move %s", gAppState.jobs[i].input);
+            //    ImGui::Text("Move %s", appState->jobs[i].input);
             //    ImGui::EndDragDropSource();
             //}
 
@@ -484,7 +484,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
 
             ImGui::TableSetColumnIndex(2);
 
-            f32* targetSize = &gAppState.jobs[i].targetSizeMb;
+            f32* targetSize = &appState->jobs[i].targetSizeMb;
             ImGui::SetNextItemWidth(sliderWidth);
             ImGui::SliderFloat("##mb_slider", targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                                "%.1f MB", ImGuiSliderFlags_Logarithmic);
@@ -495,7 +495,7 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
 
             ImGui::TableSetColumnIndex(3);
             ImGui::TextUnformatted(StatusText(static_cast<JobStatus>(
-                InterlockedCompareExchange(&gAppState.jobs[i].status, 0, 0))));
+                InterlockedCompareExchange(&appState->jobs[i].status, 0, 0))));
 
             ImGui::TableSetColumnIndex(4);
             ImGui::BeginDisabled(job->status == JobStatus::RUNNING);
@@ -514,13 +514,13 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
         //}
 
         if (removeIndex != -1) {
-            RemoveJob(removeIndex);
+            RemoveJob(appState, removeIndex);
         }
     }
 
-    ImGui::BeginDisabled(busy || gAppState.jobCount == 0);
+    ImGui::BeginDisabled(busy || appState->jobCount == 0);
     if (ImGui::Button("Start", ImVec2(100, 0))) {
-        StartBatch();
+        StartBatch(appState);
     }
 
     ImGui::EndDisabled();
@@ -528,16 +528,16 @@ DrawUi(HINSTANCE hInstance, HWND hWnd) {
     //ImGui::SameLine();
     //ImGui::BeginDisabled(!busy);
     //if (ImGui::Button("Cancel after current", ImVec2(180, 0))) {
-    //    InterlockedExchange(&gAppState.cancelRequested, 1);
+    //    InterlockedExchange(&appState->cancelRequested, 1);
     //}
 
     //ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(busy || gAppState.jobCount == 0);
+    ImGui::BeginDisabled(busy || appState->jobCount == 0);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
         OutputDebugStringA("Clear\n");
-        gAppState.jobCount = 0;
+        appState->jobCount = 0;
     }
 
     ImGui::EndDisabled();
@@ -660,6 +660,10 @@ CleanupDeviceD3D() {
     }
 }
 
+// Used only inside WndProc
+// TOOD: there might be a way to pass appState via the HWND
+AppState* gAppState;
+
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam,
                                                              LPARAM lParam);
 
@@ -681,23 +685,27 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // If we don't query we have no way of deducing if the path was truncated or it's
             // exactly MAX_PATH_COUNT long
             UINT required = DragQueryFileA(drop, i, nullptr, 0);
-            snprintf(buf, sizeof(buf), "Required %d (not including null terminator)\n", required);
-            OutputDebugStringA(buf);
 
             // Get the path and get the copied amount, not including null terminator
             UINT copied = DragQueryFileA(drop, i, path, sizeof(path));
-            snprintf(buf, sizeof(buf), "Copied %d (not including null terminator)\n", copied);
+            snprintf(buf, sizeof(buf),
+                     "Required: %u, copied %u (both not including null terminator)\n", required,
+                     copied);
             OutputDebugStringA(buf);
 
+            // required > copied would work as well
             if (required >= sizeof(path)) {
-                snprintf(buf, sizeof(buf),
-                         "Path was truncated, didn't add job!\nPath would have been %s\n", path);
+                snprintf(
+                    buf, sizeof(buf),
+                    "Path was truncated, didn't add job! Max length: %d\nPath would have been %s\n",
+                    MAX_PATH_COUNT, path);
                 OutputDebugStringA(buf);
                 // TODO: show error for user for discarded files
                 continue;
             }
 
-            AddJob(path);
+            ASSERT(gAppState);
+            AddJob(gAppState, path);
         }
 
         DragFinish(drop);
@@ -787,8 +795,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplDX11_Init(gDevice, gContext);
 
     //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
-    gAppState.defaultTargetSize = DEFAULT_TARGET_SIZE;
+    AppState appState = {};
+    appState.defaultTargetSize = DEFAULT_TARGET_SIZE;
+    gAppState = &appState;
 
     // Test data
 #if COMPRESSOR_INTERNAL
@@ -799,29 +808,29 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     snprintf(testPath1, sizeof(testPath1), "%s..\\test_file1_large.mp4", pathInfo.exeDir);
     snprintf(testPath2, sizeof(testPath2), "%s..\\test_file2.mp4", pathInfo.exeDir);
 
-    AddJob(testPath1);
-    AddJob(testPath2);
+    AddJob(&appState, testPath1);
+    AddJob(&appState, testPath2);
 #endif
 
-    bool32 done = false;
+    bool32 running = true;
 
-    while (!done) {
+    while (running) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
             if (msg.message == WM_QUIT) {
-                done = true;
+                running = false;
             }
         }
 
-        if (done) {
+        if (!running) {
             break;
         }
 
         // Handle window being minimized or screen locked
         if (gSwapChainOccluded && gSwap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) {
-            ::Sleep(10);
+            Sleep(10);
             continue;
         }
 
@@ -839,7 +848,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        DrawUi(hInstance, hWnd);
+        DrawUi(&appState, hInstance, hWnd);
         ImGui::Render();
 
         //const float clearColorWithAlpha[4] = { clearColor.x * clearColor.w,

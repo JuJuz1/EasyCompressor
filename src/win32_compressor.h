@@ -41,10 +41,6 @@ struct AppState {
     volatile long cancelRequested;
     HANDLE workerThread;
 
-    // compressor DLL handles (your existing CompressorCode, simplified here)
-    //compressor_impl* compress = nullptr;
-    //Memory memory = {};
-
     f32 defaultTargetSize;
 
     // All UI state with ImGui

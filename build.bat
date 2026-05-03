@@ -5,7 +5,8 @@ pushd build
 
 set commonCompilerDefines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_INTERNAL=1 -DCOMPRESSOR_DEBUG=1
 
-set commonCompilerFlags=%commonCompilerDefines% /W4 /MTd /Zi /Zc:__cplusplus /FC /Fm /Od /Oi /EHa- /GR- /std:c++20 /nologo
+rem /FAs /Fm, .asm and .map
+set commonCompilerFlags=%commonCompilerDefines% /W4 /MTd /Zi /Zc:__cplusplus /FC /Od /Oi /EHa- /GR- /std:c++20 /nologo
 rem /LTCG link time optimization
 set commonLinkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:REF /OPT:ICF /FIXED /merge:_RDATA=.rdata
 set win32Libraries=Kernel32.lib User32.lib Shell32.lib Comdlg32.lib
