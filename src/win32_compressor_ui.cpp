@@ -139,6 +139,100 @@ RemoveJob(AppState* appState, i32 index) {
 // -----------------------------------------------------------------------------
 
 static void
+RunProbe(AppState* appState, UIJob* job, i32 i) {
+    job->status = JobStatus::RUNNING_PROBE;
+
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+
+    if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+        OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
+        job->status = JobStatus::ERROR;
+        return;
+    }
+
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+    char cmd[(MAX_PATH_COUNT * 2) + 128];
+    snprintf(cmd, sizeof(cmd),
+             "\"%sffprobe.exe\" -v error -show_entries format=duration "
+             "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
+             appState->ffmpegPath, job->input);
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = writePipe;
+    si.hStdError = writePipe;
+
+    PROCESS_INFORMATION pi = {};
+
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
+        OutputDebugStringA(buf);
+    }
+
+    // TODO: handle exiting the program more controlled
+    // Now Windows decides if the process should finish or not
+    BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
+                                  TRUE, // inherit handles!
+                                  CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+
+    CloseHandle(writePipe);
+
+    if (!created) {
+        OutputDebugStringA("Couldn't create process ffprobe! Aborting all jobs!\n");
+        job->status = JobStatus::ERROR;
+        CloseHandle(readPipe);
+        return;
+    }
+
+    // Read output
+    char buffer[256] = {};
+    DWORD bytesRead = 0;
+
+    char output[256] = {};
+    DWORD totalRead = 0;
+
+    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
+        if (totalRead + bytesRead < sizeof(output)) {
+            CopyMemory(output + totalRead, buffer, bytesRead);
+            totalRead += bytesRead;
+        } else {
+            OutputDebugStringA("No space in buffer for ffprobe output!\n");
+        }
+    }
+
+    CloseHandle(readPipe);
+
+    OutputDebugStringA("Waiting for ffprobe...\n");
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    OutputDebugStringA("ffprobe finished\n");
+
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (exitCode == 0) {
+        // Parse duration
+        job->durationSeconds = static_cast<f32>(atof(output));
+
+        //job->progressPct = 100;
+
+        job->status = JobStatus::DONE_PROBE;
+    } else {
+        job->status = JobStatus::ERROR;
+    }
+}
+
+static void
 RunCompress(AppState* appState, UIJob* job, i32 i) {
     job->status = JobStatus::RUNNING_COMPRESS;
 
@@ -329,100 +423,6 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
     }
 }
 
-static void
-RunProbe(AppState* appState, UIJob* job, i32 i) {
-    job->status = JobStatus::RUNNING_PROBE;
-
-    SECURITY_ATTRIBUTES sa = {};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-
-    HANDLE readPipe = nullptr;
-    HANDLE writePipe = nullptr;
-
-    if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
-        OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
-        job->status = JobStatus::ERROR;
-        return;
-    }
-
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-
-    char cmd[(MAX_PATH_COUNT * 2) + 128];
-    snprintf(cmd, sizeof(cmd),
-             "\"%sffprobe.exe\" -v error -show_entries format=duration "
-             "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
-             appState->ffmpegPath, job->input);
-
-    STARTUPINFOA si = {};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = writePipe;
-    si.hStdError = writePipe;
-
-    PROCESS_INFORMATION pi = {};
-
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
-        OutputDebugStringA(buf);
-    }
-
-    // TODO: handle exiting the program more controlled
-    // Now Windows decides if the process should finish or not
-    BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
-                                  TRUE, // inherit handles!
-                                  CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-
-    CloseHandle(writePipe);
-
-    if (!created) {
-        OutputDebugStringA("Couldn't create process ffprobe! Aborting all jobs!\n");
-        job->status = JobStatus::ERROR;
-        CloseHandle(readPipe);
-        return;
-    }
-
-    // Read output
-    char buffer[256] = {};
-    DWORD bytesRead = 0;
-
-    char output[256] = {};
-    DWORD totalRead = 0;
-
-    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
-        if (totalRead + bytesRead < sizeof(output)) {
-            CopyMemory(output + totalRead, buffer, bytesRead);
-            totalRead += bytesRead;
-        } else {
-            OutputDebugStringA("No space in buffer for ffprobe output!\n");
-        }
-    }
-
-    CloseHandle(readPipe);
-
-    OutputDebugStringA("Waiting for ffprobe...\n");
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    OutputDebugStringA("ffprobe finished\n");
-
-    DWORD exitCode = 0;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    if (exitCode == 0) {
-        // Parse duration
-        job->durationSeconds = static_cast<f32>(atof(output));
-
-        //job->progressPct = 100;
-
-        job->status = JobStatus::DONE_PROBE;
-    } else {
-        job->status = JobStatus::ERROR;
-    }
-}
-
 static DWORD WINAPI
 WorkerThread(void* param) {
     AppState* appState = static_cast<AppState*>(param);
@@ -441,7 +441,9 @@ WorkerThread(void* param) {
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 UIJob* job = &appState->jobs[i];
-                if (job->status == JobStatus::DONE_PROBE) {
+                // Allow compressing again
+                if (job->status == JobStatus::DONE_PROBE ||
+                    job->status == JobStatus::DONE_COMPRESS) {
                     RunCompress(appState, job, i);
                 }
             }
@@ -776,7 +778,6 @@ StartBatch(AppState* appState) {
     OutputDebugStringA("Start clicked\n");
 
     // This is read by worker thread
-    //_InterlockedExchange(&appState->compressing, 1);
 
     //_InterlockedExchange(&appState->cancelRequested, 0);
     //appState->workerThread =
@@ -1022,12 +1023,11 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         i32 removeIndex = -1;
 
         for (i32 i = 0; i < appState->jobCount; ++i) {
-
             UIJob* job = &appState->jobs[i];
 
             bool32 jobRunning = job->status == JobStatus::RUNNING_PROBE ||
                                 job->status == JobStatus::RUNNING_COMPRESS;
-            compressing |= job->status == jobRunning;
+            compressing |= jobRunning;
 
             ImGui::PushID(i);
             ImGui::TableNextRow();
@@ -1100,17 +1100,42 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
             ImGui::TableSetColumnIndex(3);
 
-            f32* targetSize = &appState->jobs[i].targetSizeMb;
+            f32* targetSize = &job->targetSizeMb;
+            bool32 tooLargeBefore = *targetSize >= job->inputFileSize;
+            if (tooLargeBefore) {
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.15f, 0.15f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.65f, 0.2f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.75f, 0.25f, 0.25f, 1.0f));
+            }
+
             ImGui::BeginDisabled(jobRunning);
             ImGui::SetNextItemWidth(sliderWidth);
             ImGui::SliderFloat("##mb_slider", targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                                "%.1f MB", ImGuiSliderFlags_Logarithmic);
+            if (tooLargeBefore && ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(
+                    "Warning: target size greater than file size! File will not be compressed!");
+                ImGui::EndTooltip();
+            }
 
             ImGui::SetNextItemWidth(sliderWidth);
             ImGui::InputFloat("##mb_input", targetSize, 0.0f, 0.0f, "%.2f MB");
+            if (tooLargeBefore && ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(
+                    "Warning: target size greater than file size! File will not be compressed!");
+                ImGui::EndTooltip();
+            }
 
-            ImGui::EndDisabled();
+            if (tooLargeBefore) {
+                ImGui::PopStyleColor(5);
+            }
+
             *targetSize = ClampF32(*targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
+            ImGui::EndDisabled();
 
             ImGui::TableSetColumnIndex(4);
 
