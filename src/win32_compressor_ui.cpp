@@ -10,22 +10,18 @@
 // TODO: UNICODE SUPPORT?
 
 #if COMPRESSOR_WIN32
-#    define UNICODE
+//#    define UNICODE
 #    define WIN32_LEAN_AND_MEAN
-#    define POPEN _popen
-#    define PCLOSE _pclose
+//#    define POPEN _popen
+//#    define PCLOSE _pclose
 #    define PATH_SEP '\\'
-#    define NULL_DEV "NUL"
+#    define NULL_DEV "NU"
 
 #    include <windows.h>
 
-#    include <cderr.h>
-#    include <commdlg.h> // GetSaveFileNameA
-#    include <d3d11.h>
-#    include <process.h>  // _beginthreadex
-#    include <shellapi.h> // DragAcceptFiles, DragQueryFileA, DragFinish
-#    include <stdio.h>
-#    include <tchar.h>
+#    include <cderr.h>   // CommDlg errors
+#    include <commdlg.h> // OFN, GetSaveFileNameA
+#    include <process.h> // _beginthreadex
 
 // Windows...
 #    ifdef ERROR
@@ -54,16 +50,9 @@
 //#include "backends/imgui_impl_win32.h"
 //#include "imgui.h"
 
-//extern "C" {
 #include "compressor.h"
 
 #include "win32_compressor.h"
-
-//}
-
-// -----------------------------------------------------------------------------
-// Queue model
-// -----------------------------------------------------------------------------
 
 static void
 AddJob(AppState* appState, const char* path) {
@@ -73,7 +62,8 @@ AddJob(AppState* appState, const char* path) {
     }
 
     UIJob* j = &appState->jobs[appState->jobCount++];
-    *j = UIJob{};
+    //*j = UIJob{}; Compiler error when using /O2
+    ZeroMemory(j, sizeof(j));
 
     j->status = JobStatus::QUEUED;
     j->targetSizeMb = appState->defaultTargetSize;
@@ -138,29 +128,8 @@ RemoveJob(AppState* appState, i32 index) {
     appState->jobCount--;
 }
 
-//static void
-//MoveJob(int from, int to) {
-//    if (from == to || from < 0 || to < 0 || from >= appState->jobCount ||
-//        to >= appState->jobCount) {
-//        return;
-//    }
-
-//    UIJob tmp = appState->jobs[from];
-//    if (from < to) {
-//        for (int i = from; i < to; ++i) {
-//            appState->jobs[i] = appState->jobs[i + 1];
-//        }
-//    } else {
-//        for (int i = from; i > to; --i) {
-//            appState->jobs[i] = appState->jobs[i - 1];
-//        }
-//    }
-
-//    appState->jobs[to] = tmp;
-//}
-
 // -----------------------------------------------------------------------------
-// Worker thread — runs jobs sequentially. For parallel encoding, spawn N of these
+// Worker thread, runs jobs sequentially. For parallel encoding, spawn N of these
 // and have them pop jobs off a shared index with InterlockedIncrement.
 // -----------------------------------------------------------------------------
 
@@ -476,6 +445,8 @@ WorkerThread(void* param) {
 }
 
 // TODO: probing should be run automatically when a file is added, seems like the best workflow
+// So we need a queue from which the worker thread executes stuff from and the app produces jobs
+// i.e. consumer producer
 static void
 StartBatch(AppState* appState) {
     if (appState->jobCount == 0) {
@@ -492,6 +463,10 @@ StartBatch(AppState* appState) {
     appState->workerThread =
         reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, WorkerThread, appState, 0, nullptr));
 }
+
+// -----------------------------------------------------------------------------
+/// Path stuff
+// -----------------------------------------------------------------------------
 
 static void
 GetExeDirectory(AppState* appState) {
@@ -684,6 +659,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.2f MB");
     *defaultTargetSize = ClampF32(*defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
+    // TODO: read from config file and be able to save a preset for the default?
     if (ImGui::Button("5 MB##default", ImVec2(80, 0))) {
         *defaultTargetSize = 5.0f;
     }
@@ -694,8 +670,18 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     }
 
     ImGui::SameLine();
+    if (ImGui::Button("25 MB##default", ImVec2(80, 0))) {
+        *defaultTargetSize = 25.0f;
+    }
+
+    ImGui::SameLine();
     if (ImGui::Button("50 MB##default", ImVec2(80, 0))) {
         *defaultTargetSize = 50.0f;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("100 MB##default", ImVec2(80, 0))) {
+        *defaultTargetSize = 100.0f;
     }
 
     /// Table
@@ -706,8 +692,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         ImGui::TableSetupColumn(
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 105);
-        ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
+        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 114);
+        ImGui::TableSetupColumn("Target size", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
@@ -758,7 +744,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                     OpenInExplorer(hWnd, job->input);
                 }
 
-                // TODO: ?
+                // TODO: more?
                 //if (ImGui::MenuItem("Reset to default output")) {
                 //DeriveOutputPath(job->input, job->output, sizeof(job->output));
                 //}
@@ -876,8 +862,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                                    ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextUnformatted("EasyCompressor");
         ImGui::Separator();
-        ImGui::TextUnformatted("Built with ImGui");
-        ImGui::Text("Max length for input/output paths is: %d", MAX_PATH_COUNT);
+
+        ImGui::TextUnformatted("Built with");
+        ImGui::SameLine();
+        ImGui::TextLinkOpenURL("ImGui", "https://github.com/ocornut/imgui");
+
+        ImGui::Text("Max length for input/output paths is %d", MAX_PATH_COUNT);
         ImGui::TextUnformatted("Small target sizes (below 10 MB) might result in the\ncompressed "
                                "size being slightly above the target size");
 
@@ -895,7 +885,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 }
 
 // -----------------------------------------------------------------------------
-// Win32 / DX11 plumbing (boilerplate from the ImGui example, trimmed)
+/// Win32 / DX11 boilerplate (from the ImGui example, trimmed)
 // -----------------------------------------------------------------------------
 
 static ID3D11Device* gDevice;
@@ -1002,7 +992,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
-        // TODO: validate by most common video file extensions
+        // TODO: validate by most common video file extensions?
         for (i32 i = 0; i < fileCount; ++i) {
             char path[MAX_PATH_COUNT];
             char buf[MAX_PATH_COUNT + 128];
@@ -1051,7 +1041,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
-    return DefWindowProcW(hWnd, msg, wParam, lParam);
+    return DefWindowProcA(hWnd, msg, wParam, lParam);
 }
 
 int WINAPI
@@ -1060,8 +1050,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     f32 mainScale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    const auto* name = L"EasyCompressor";
-    WNDCLASSEXW windowClass = { sizeof(windowClass),
+    const char* name = "EasyCompressor";
+    WNDCLASSEXA windowClass = { sizeof(windowClass),
                                 CS_CLASSDC,
                                 WndProc,
                                 0,
@@ -1074,13 +1064,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                                 name,
                                 nullptr };
 
-    if (!RegisterClassExW(&windowClass)) {
+    if (!RegisterClassExA(&windowClass)) {
         OutputDebugStringA("Failed to register windowClass!\n");
         return 0;
     }
 
     HWND hWnd =
-        CreateWindowExW(0, windowClass.lpszClassName, name, WS_OVERLAPPEDWINDOW, 100, 100,
+        CreateWindowExA(0, windowClass.lpszClassName, name, WS_OVERLAPPEDWINDOW, 100, 100,
                         static_cast<i32>(1280 * mainScale), static_cast<i32>(800 * mainScale),
                         nullptr, nullptr, hInstance, nullptr);
 
@@ -1140,9 +1130,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     while (running) {
         MSG msg;
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            DispatchMessageA(&msg);
             if (msg.message == WM_QUIT) {
                 running = false;
             }
@@ -1190,6 +1180,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     CleanupDeviceD3D();
     DestroyWindow(hWnd);
-    UnregisterClassW(windowClass.lpszClassName, windowClass.hInstance);
+    UnregisterClassA(windowClass.lpszClassName, windowClass.hInstance);
     return 0;
 }
