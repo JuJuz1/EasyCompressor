@@ -15,11 +15,12 @@ enum JobStatus : u8 {
 struct UIJob {
     char input[MAX_PATH_COUNT];
     char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
+    volatile long status;             // JobStatus, written across threads via Interlocked*
+    //volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
     f32 targetSizeMb;
-    volatile long status;      // JobStatus, written across threads via Interlocked*
-    volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
 
-    f32 durationSeconds; // Probed from the video before compression (2-pass)
+    f32 inputFileSize;   // Size of the video
+    f32 durationSeconds; // Probed from the video before compression (2 passes)
 };
 
 #define MAX_JOBS 10
@@ -45,14 +46,14 @@ struct AppState {
     // All UI state with ImGui
     UIState uiState;
 
-    char exeDir[MAX_PATH_COUNT]; // Absolute path to the exe directory
-    char ffmpegPath[MAX_PATH_COUNT];
+    char exeDir[MAX_PATH_COUNT];     // Absolute path to the exe directory
+    char ffmpegPath[MAX_PATH_COUNT]; // Relative to working directory OR TODO: path?
 };
 
-struct FFmpegParams {
-    const char* ffmpegPath;
-    const char* input;
-    const char* output;
+//struct FFmpegParams {
+//    const char* ffmpegPath;
+//    const char* input;
+//    const char* output;
 
-    f32 targetSizeMb;
-};
+//    f32 targetSizeMb;
+//};

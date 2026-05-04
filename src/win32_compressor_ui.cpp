@@ -104,6 +104,14 @@ AddJob(AppState* appState, const char* path) {
         snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
     }
 
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+    if (GetFileAttributesExA(j->input, GetFileExInfoStandard, &fileInfo)) {
+        u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
+        j->inputFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
+    } else {
+        OutputDebugStringA("Failed to get file size!\n");
+    }
+
     char buf[(MAX_PATH_COUNT * 2) + 256];
     snprintf(buf, sizeof(buf),
              "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
@@ -205,6 +213,8 @@ WorkerThread(void* param) {
             OutputDebugStringA(buf);
         }
 
+        // TODO: handle exiting the program more controlled
+        // Now Windows decides if the process should finish or not
         BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
                                       TRUE, // inherit handles!
                                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -565,13 +575,13 @@ StatusText(JobStatus s) {
     case JobStatus::QUEUED:
         return "Queued";
     case JobStatus::RUNNING_PROBE:
-        return "Running probe";
+        return "Calculating duration...";
     case JobStatus::DONE_PROBE:
-        return "Done probe";
+        return "Duration calculated!";
     case JobStatus::RUNNING_COMPRESS:
-        return "Running compress";
+        return "Compressing...";
     case JobStatus::DONE_COMPRESS:
-        return "Done compress";
+        return "Compressed!";
     case JobStatus::ERROR:
         return "Error";
     }
@@ -603,6 +613,11 @@ ClampF32(f32 value, f32 min, f32 max) {
     }
 
     return value;
+}
+
+static void
+CancelAfterCurrent(AppState* appState) {
+    OutputDebugStringA("Cancel after current\n");
 }
 
 static void
@@ -666,7 +681,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::EndDisabled();
 
     ImGui::SetNextItemWidth(sliderWidth);
-    ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.3f MB");
+    ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.2f MB");
     *defaultTargetSize = ClampF32(*defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
     if (ImGui::Button("5 MB##default", ImVec2(80, 0))) {
@@ -685,14 +700,15 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
     /// Table
 
-    if (ImGui::BeginTable("queue", 5,
+    if (ImGui::BeginTable("queue", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn(
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 105);
         ImGui::TableSetupColumn("Target MB", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 120);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
@@ -711,19 +727,23 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             ImGui::Text("%d", i + 1);
 
             ImGui::TableSetColumnIndex(1);
-            ImGui::Text(job->input);
+            ImGui::TextUnformatted(job->input);
 
+            ImGui::BeginDisabled(jobRunning);
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
             ImGui::Selectable(job->output);
             ImGui::PopStyleColor();
+
+            ImGui::EndDisabled();
 
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
                 //ImGui::Text("Input:\n%s", job->input);
                 //ImGui::Text("Output:\n%s", job->output);
                 //ImGui::Separator();
-                ImGui::Text("Click to change output directory\n");
-                ImGui::Text("Right click for more options\n");
+                ImGui::TextUnformatted("Click to change output directory\n");
+                ImGui::TextUnformatted("Middle click to open input in explorer\n");
+                ImGui::TextUnformatted("Right click for more options\n");
                 ImGui::EndTooltip();
             }
 
@@ -731,6 +751,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                 PickOutputPath(hInstance, hWnd, job->output);
                 // This is done to reset broken hover state after the dialog closes
                 ImGui::GetIO().ClearInputMouse();
+            } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
+                OpenInExplorer(hWnd, job->input);
             } else if (ImGui::BeginPopupContextItem("job_context_menu")) {
                 if (ImGui::MenuItem("Open input in explorer...")) {
                     OpenInExplorer(hWnd, job->input);
@@ -762,27 +784,43 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             //}
 
             ImGui::TableSetColumnIndex(2);
+            ImGui::Text("Size: %.1f MB", job->inputFileSize);
+            if (job->durationSeconds != 0.0f) {
+                ImGui::Text("Duration: %.1f s", job->durationSeconds);
+            }
+
+            ImGui::TableSetColumnIndex(3);
 
             f32* targetSize = &appState->jobs[i].targetSizeMb;
+            ImGui::BeginDisabled(jobRunning);
             ImGui::SetNextItemWidth(sliderWidth);
             ImGui::SliderFloat("##mb_slider", targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
                                "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
             ImGui::SetNextItemWidth(sliderWidth);
-            ImGui::InputFloat("##mb_input", targetSize, 0.0f, 0.0f, "%.3f MB");
+            ImGui::InputFloat("##mb_input", targetSize, 0.0f, 0.0f, "%.2f MB");
+
+            ImGui::EndDisabled();
             *targetSize = ClampF32(*targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(4);
 
             const char* statusText = StatusText(static_cast<JobStatus>(job->status));
             ImGui::TextUnformatted(statusText);
-            if (job->durationSeconds != 0.0f) {
-                ImGui::Text("Duration: %.1f s", job->durationSeconds);
-            } else {
-                ImGui::TextUnformatted("Calculating...");
+            if (job->status == JobStatus::DONE_COMPRESS) {
+                if (ImGui::SmallButton("Open")) {
+                    OpenInExplorer(hWnd, job->output);
+                }
             }
 
-            ImGui::TableSetColumnIndex(4);
+            // TODO: show progress on probe duration and compression
+            //if (job->durationSeconds != 0.0f) {
+            //    ImGui::Text("Duration: %.1f s", job->durationSeconds);
+            //} else {
+            //    ImGui::TextUnformatted("Calculating...");
+            //}
+
+            ImGui::TableSetColumnIndex(5);
             ImGui::BeginDisabled(jobRunning);
             if (ImGui::SmallButton("X")) {
                 removeIndex = i;
@@ -810,15 +848,15 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
     ImGui::EndDisabled();
 
-    //ImGui::SameLine();
-    //ImGui::BeginDisabled(!busy);
-    //if (ImGui::Button("Cancel after current", ImVec2(180, 0))) {
-    //    InterlockedExchange(&appState->cancelRequested, 1);
-    //}
-
-    //ImGui::EndDisabled();
-
     ImGui::SameLine();
+    ImGui::BeginDisabled(!workerThreadRunning || appState->jobCount == 0);
+    if (ImGui::Button("Cancel after current")) {
+        CancelAfterCurrent(appState);
+    }
+
+    ImGui::EndDisabled();
+    ImGui::Separator();
+
     ImGui::BeginDisabled(workerThreadRunning || appState->jobCount == 0);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
         OutputDebugStringA("Clear\n");
@@ -836,10 +874,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse)) {
-        ImGui::Text("EasyCompressor");
+        ImGui::TextUnformatted("EasyCompressor");
         ImGui::Separator();
-        ImGui::Text("Built with ImGui");
-        ImGui::Text("Max path length for input/output paths is: %d", MAX_PATH_COUNT);
+        ImGui::TextUnformatted("Built with ImGui");
+        ImGui::Text("Max length for input/output paths is: %d", MAX_PATH_COUNT);
+        ImGui::TextUnformatted("Small target sizes (below 10 MB) might result in the\ncompressed "
+                               "size being slightly above the target size");
 
         if (ImGui::Button("OK")) {
             ImGui::CloseCurrentPopup();
