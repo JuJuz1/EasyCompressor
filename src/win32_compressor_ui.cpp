@@ -437,11 +437,15 @@ WorkerThread(void* param) {
             }
         }
 
-        if (_InterlockedCompareExchange(&appState->compressing, 1, 1)) {
+        if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 UIJob* job = &appState->jobs[i];
                 // Allow compressing again
+                // TODO: should the default be this so every file gets compressed again?
+                // OR the user can choose if just compressed files should be skipped or compressed
+                // again. This covers both the cases of adding files when compressing and not
+                // compressing
                 if (job->status == JobStatus::DONE_PROBE ||
                     job->status == JobStatus::DONE_COMPRESS) {
                     RunCompress(appState, job, i);
@@ -455,318 +459,6 @@ WorkerThread(void* param) {
     }
 }
 
-//static unsigned __stdcall
-//WorkerThreadOLD(void* param) {
-//    return 0;
-
-//    AppState* appState = static_cast<AppState*>(param);
-
-//    // Probe duration
-//    for (i32 i = 0; i < appState->jobCount; ++i) {
-//        //if (InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
-//        //    break;
-//        //}
-
-//        UIJob* job = &appState->jobs[i];
-//        job->status = JobStatus::RUNNING_PROBE;
-
-//        SECURITY_ATTRIBUTES sa = {};
-//        sa.nLength = sizeof(sa);
-//        sa.bInheritHandle = TRUE;
-
-//        HANDLE readPipe = nullptr;
-//        HANDLE writePipe = nullptr;
-
-//        if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
-//            OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
-//            job->status = JobStatus::ERROR;
-//            _InterlockedExchange(&appState->compressing, 0);
-//            return 0;
-//        }
-
-//        SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-
-//        char cmd[(MAX_PATH_COUNT * 2) + 128];
-//        snprintf(cmd, sizeof(cmd),
-//                 "\"%sffprobe.exe\" -v error -show_entries format=duration "
-//                 "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
-//                 appState->ffmpegPath, job->input);
-
-//        STARTUPINFOA si = {};
-//        si.cb = sizeof(si);
-//        si.dwFlags = STARTF_USESTDHANDLES;
-//        si.hStdOutput = writePipe;
-//        si.hStdError = writePipe;
-
-//        PROCESS_INFORMATION pi = {};
-
-//        {
-//            char buf[64];
-//            snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
-//            OutputDebugStringA(buf);
-//        }
-
-//        // TODO: handle exiting the program more controlled
-//        // Now Windows decides if the process should finish or not
-//        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
-//                                      TRUE, // inherit handles!
-//                                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-
-//        CloseHandle(writePipe);
-
-//        if (!created) {
-//            OutputDebugStringA("Couldn't create process ffprobe! Aborting all jobs!\n");
-//            job->status = JobStatus::ERROR;
-//            CloseHandle(readPipe);
-//            _InterlockedExchange(&appState->compressing, 0);
-//            return 0;
-//        }
-
-//        // Read output
-//        char buffer[256] = {};
-//        DWORD bytesRead = 0;
-
-//        char output[256] = {};
-//        DWORD totalRead = 0;
-
-//        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
-//               bytesRead > 0) {
-//            if (totalRead + bytesRead < sizeof(output)) {
-//                CopyMemory(output + totalRead, buffer, bytesRead);
-//                totalRead += bytesRead;
-//            } else {
-//                OutputDebugStringA("No space in buffer for ffprobe output!\n");
-//            }
-//        }
-
-//        CloseHandle(readPipe);
-
-//        OutputDebugStringA("Waiting for ffprobe...\n");
-//        WaitForSingleObject(pi.hProcess, INFINITE);
-//        OutputDebugStringA("ffprobe finished\n");
-
-//        DWORD exitCode = 0;
-//        GetExitCodeProcess(pi.hProcess, &exitCode);
-
-//        CloseHandle(pi.hProcess);
-//        CloseHandle(pi.hThread);
-
-//        if (exitCode == 0) {
-//            // Parse duration
-//            job->durationSeconds = static_cast<f32>(atof(output));
-
-//            //job->progressPct = 100;
-
-//            job->status = JobStatus::DONE_PROBE;
-//        } else {
-//            job->status = JobStatus::ERROR;
-//        }
-//    }
-
-//    // Compression
-//    for (i32 i = 0; i < appState->jobCount; ++i) {
-//        UIJob* job = &appState->jobs[i];
-//        job->status = JobStatus::RUNNING_COMPRESS;
-
-//        f32 totalBits = job->targetSizeMb * 1024.0f * 1024.0f * 8.0f;
-//        f32 totalKbps = (totalBits / job->durationSeconds) / 1000.0f;
-
-//        // Scale down audio if small
-//        f32 audioKbps = 128.0f;
-//        if (totalKbps < 256.0f) {
-//            audioKbps = 64.0f;
-//        }
-//        if (totalKbps < 128.0f) {
-//            audioKbps = 32.0f;
-//        }
-
-//        // TODO: 4-5% is enough, 3% might be cutting it too close
-//        // TODO: for 10 MB 3% is good, for smaller targets might not be able to hit
-//        // If target size is lass than 10 maybe then use like 5%
-//        f32 multiplier = 0.97f;
-//        f32 videoKbps = (totalKbps - audioKbps) * multiplier;
-//        if (videoKbps < 50.0f) {
-//            OutputDebugStringA("Target size too small for this video duration "
-//                               "(video bitrate would be < 50 kbps)");
-//            // TODO: cancel? and continue
-//        }
-
-//        {
-//            char buf[256];
-//            snprintf(buf, sizeof(buf),
-//                     "Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f "
-//                     "kbps\n",
-//                     job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
-//            OutputDebugStringA(buf);
-//        }
-
-//        // Pass 1
-//        char cmd[(MAX_PATH_COUNT * 2) + 128];
-//        snprintf(cmd, sizeof(cmd),
-//                 "%sffmpeg -y -hide_banner -loglevel error -stats "
-//                 "-i %s -c:v libx264 -preset medium -b:v %.0fk "
-//                 "-pass 1 -an -f null %s",
-//                 //"-pass 1 -passlogfile %s -an -f null %s",
-//                 appState->ffmpegPath, job->input, videoKbps, NULL_DEV);
-
-//        STARTUPINFOA si1 = {};
-//        si1.cb = sizeof(si1);
-//        //si.dwFlags = STARTF_USESTDHANDLES;
-//        //si.hStdOutput = writePipe;
-//        //si.hStdError = writePipe;
-
-//        PROCESS_INFORMATION pi1 = {};
-
-//        {
-//            char buf[64];
-//            snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 1 for job %d\n", i);
-//            OutputDebugStringA(buf);
-//        }
-
-//        BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-//                                       nullptr, nullptr, &si1, &pi1);
-
-//        //CloseHandle(writePipe);
-
-//        if (!created1) {
-//            OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
-//            job->status = JobStatus::ERROR;
-//            //CloseHandle(readPipe);
-//            _InterlockedExchange(&appState->compressing, 0);
-//            return 0;
-//        }
-
-//        //char buffer[256] = {};
-//        //DWORD bytesRead = 0;
-
-//        //char output[256] = {};
-//        //DWORD totalRead = 0;
-
-//        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
-//        //       bytesRead > 0) {
-//        //    if (totalRead + bytesRead < sizeof(output)) {
-//        //        CopyMemory(output + totalRead, buffer, bytesRead);
-//        //        totalRead += bytesRead;
-//        //    } else {
-//        //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
-//        //    }
-//        //}
-
-//        //CloseHandle(readPipe);
-
-//        OutputDebugStringA("Waiting for ffmpeg pass 1...\n");
-//        WaitForSingleObject(pi1.hProcess, INFINITE);
-//        OutputDebugStringA("ffmpeg finished pass 1\n");
-
-//        DWORD exitCode1 = 0;
-//        GetExitCodeProcess(pi1.hProcess, &exitCode1);
-
-//        CloseHandle(pi1.hProcess);
-//        CloseHandle(pi1.hThread);
-
-//        if (exitCode1 != 0) {
-//            job->status = JobStatus::ERROR;
-//            OutputDebugStringA("Exit code != 0 pass 1");
-//            continue;
-//        }
-
-//        //job->status = JobStatus::DONE_COMPRESS;
-//        //job->status = JobStatus::DONE_COMPRESS_PASS1; ?
-
-//        // Pass 2
-//        snprintf(cmd, sizeof(cmd),
-//                 "%sffmpeg -y -hide_banner -loglevel error -stats "
-//                 "-i %s -c:v libx264 -preset medium -b:v %.0fk "
-//                 "-pass 2 "
-//                 //"-pass 2 -passlogfile %s "
-//                 "-c:a aac -b:a %.0fk -movflags +faststart %s",
-//                 appState->ffmpegPath, job->input, videoKbps //, passLog
-//                 ,
-//                 audioKbps, job->output);
-
-//        STARTUPINFOA si2 = {};
-//        si2.cb = sizeof(si2);
-//        //si.dwFlags = STARTF_USESTDHANDLES;
-//        //si.hStdOutput = writePipe;
-//        //si.hStdError = writePipe;
-
-//        PROCESS_INFORMATION pi2 = {};
-
-//        {
-//            char buf[64];
-//            snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 2 for job %d\n", i);
-//            OutputDebugStringA(buf);
-//        }
-
-//        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-//                                       nullptr, nullptr, &si2, &pi2);
-
-//        //CloseHandle(writePipe);
-
-//        if (!created2) {
-//            OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
-//            job->status = JobStatus::ERROR;
-//            //CloseHandle(readPipe);
-//            _InterlockedExchange(&appState->compressing, 0);
-//            return 0;
-//        }
-
-//        //char buffer[256] = {};
-//        //DWORD bytesRead = 0;
-
-//        //char output[256] = {};
-//        //DWORD totalRead = 0;
-
-//        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
-//        //       bytesRead > 0) {
-//        //    if (totalRead + bytesRead < sizeof(output)) {
-//        //        CopyMemory(output + totalRead, buffer, bytesRead);
-//        //        totalRead += bytesRead;
-//        //    } else {
-//        //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
-//        //    }
-//        //}
-
-//        //CloseHandle(readPipe);
-
-//        OutputDebugStringA("Waiting for ffmpeg pass 2...\n");
-//        WaitForSingleObject(pi2.hProcess, INFINITE);
-//        OutputDebugStringA("ffmpeg finished pass 2\n");
-
-//        DWORD exitCode2 = 0;
-//        GetExitCodeProcess(pi2.hProcess, &exitCode2);
-
-//        CloseHandle(pi2.hProcess);
-//        CloseHandle(pi2.hThread);
-
-//        if (exitCode2 != 0) {
-//            job->status = JobStatus::ERROR;
-//            OutputDebugStringA("Exit code != 0 pass 2");
-//            continue;
-//        }
-
-//        job->status = JobStatus::DONE_COMPRESS;
-
-//        // TODO: We could probably get this from ffmpeg output also, but much easier this way
-//        WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-//        if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
-//            u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
-//            job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
-//        } else {
-//            OutputDebugStringA("Failed to get file size!\n");
-//        }
-//    }
-
-//    _InterlockedExchange(&appState->compressing, 0);
-
-//    return 0;
-//}
-
-// TODO: probing should be run automatically when a file is added, seems like the best workflow
-// So we need a queue from which the worker thread executes stuff from and the app produces jobs
-// i.e. consumer producer
-// Also take a look at the intrinsics via the _InterLockedCompareExhange stuff, and are they
-// actually needed if we only read the values. Only the worker thread is writing so probably not
 static void
 StartBatch(AppState* appState) {
     if (appState->jobCount == 0) {
@@ -774,7 +466,7 @@ StartBatch(AppState* appState) {
     }
 
     // appState->compressing is read by WorkerThread
-    _InterlockedCompareExchange(&appState->compressing, 1, 0);
+    _InterlockedExchange(&appState->compressing, 1);
     OutputDebugStringA("Start clicked\n");
 
     // This is read by worker thread
@@ -868,7 +560,7 @@ static const char*
 StatusText(JobStatus s) {
     switch (s) {
     case JobStatus::QUEUED:
-        return "Queued";
+        return "Queued for next start...";
     case JobStatus::RUNNING_PROBE:
         return "Calculating duration...";
     case JobStatus::DONE_PROBE:
@@ -1006,6 +698,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     }
 
     /// Table
+    // TODO: allow sorting based on input/output?
+    // This is just an idea and in no means a necessary feature
+    // At least for file info (size or duration or both???, both might not be feasible or even
+    // necessary), target size and status
 
     if (ImGui::BeginTable("queue", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
