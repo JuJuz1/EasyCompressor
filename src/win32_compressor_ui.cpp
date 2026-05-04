@@ -22,7 +22,6 @@
 #    include <cderr.h>
 #    include <commdlg.h> // GetSaveFileNameA
 #    include <d3d11.h>
-#    include <io.h>
 #    include <process.h>  // _beginthreadex
 #    include <shellapi.h> // DragAcceptFiles, DragQueryFileA, DragFinish
 #    include <stdio.h>
@@ -40,7 +39,6 @@
 #    ifdef min
 #        undef min
 #    endif
-
 #endif
 
 #include "imgui_draw.cpp"
@@ -162,6 +160,7 @@ static unsigned __stdcall
 WorkerThread(void* param) {
     AppState* appState = static_cast<AppState*>(param);
 
+    // Probe duration
     for (i32 i = 0; i < appState->jobCount; ++i) {
         //if (InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
         //    break;
@@ -200,9 +199,12 @@ WorkerThread(void* param) {
 
         PROCESS_INFORMATION pi = {};
 
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
-        OutputDebugStringA(buf);
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
+            OutputDebugStringA(buf);
+        }
+
         BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
                                       TRUE, // inherit handles!
                                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -256,6 +258,206 @@ WorkerThread(void* param) {
         } else {
             job->status = JobStatus::ERROR;
         }
+    }
+
+    // Compression
+    for (i32 i = 0; i < appState->jobCount; ++i) {
+        UIJob* job = &appState->jobs[i];
+        job->status = JobStatus::RUNNING_COMPRESS;
+
+        //SECURITY_ATTRIBUTES sa = {};
+        //sa.nLength = sizeof(sa);
+        //sa.bInheritHandle = TRUE;
+
+        //HANDLE readPipe = nullptr;
+        //HANDLE writePipe = nullptr;
+
+        //if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+        //    OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
+        //    job->status = JobStatus::ERROR;
+        //    _InterlockedExchange(&appState->workerRunning, 0);
+        //    return 0;
+        //}
+
+        //SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+        f32 totalBits = job->targetSizeMb * 1024.0f * 1024.0f * 8.0f;
+        f32 totalKbps = (totalBits / job->durationSeconds) / 1000.0f;
+
+        // Scale down audio if small
+        f32 audioKbps = 128.0f;
+        if (totalKbps < 256.0f) {
+            audioKbps = 64.0f;
+        }
+        if (totalKbps < 128.0f) {
+            audioKbps = 32.0f;
+        }
+
+        // TODO: 4-5% is enough, 3% might be cutting it too close
+        // TODO: for 10 MB 3% is good, for smaller targets might not be able to hit
+        f32 multiplier = 0.97f;
+        f32 videoKbps = (totalKbps - audioKbps) * multiplier;
+        if (videoKbps < 50.0f) {
+            OutputDebugStringA("Target size too small for this video duration "
+                               "(video bitrate would be < 50 kbps)");
+            // TODO: cancel? and continue
+        }
+
+        {
+            char buf[256];
+            snprintf(
+                buf, sizeof(buf),
+                "Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f kbps\n",
+                job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
+            OutputDebugStringA(buf);
+        }
+
+        // Pass 1
+        char cmd[(MAX_PATH_COUNT * 2) + 128];
+        snprintf(cmd, sizeof(cmd),
+                 "%sffmpeg -y -hide_banner -loglevel error -stats "
+                 "-i %s -c:v libx264 -preset medium -b:v %.0fk "
+                 "-pass 1 -an -f null %s",
+                 //"-pass 1 -passlogfile %s -an -f null %s",
+                 appState->ffmpegPath, job->input, videoKbps, NULL_DEV);
+
+        STARTUPINFOA si1 = {};
+        si1.cb = sizeof(si1);
+        //si.dwFlags = STARTF_USESTDHANDLES;
+        //si.hStdOutput = writePipe;
+        //si.hStdError = writePipe;
+
+        PROCESS_INFORMATION pi1 = {};
+
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 1 for job %d\n", i);
+            OutputDebugStringA(buf);
+        }
+
+        BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                       nullptr, nullptr, &si1, &pi1);
+
+        //CloseHandle(writePipe);
+
+        if (!created1) {
+            OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            //CloseHandle(readPipe);
+            _InterlockedExchange(&appState->workerRunning, 0);
+            return 0;
+        }
+
+        //char buffer[256] = {};
+        //DWORD bytesRead = 0;
+
+        //char output[256] = {};
+        //DWORD totalRead = 0;
+
+        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        //       bytesRead > 0) {
+        //    if (totalRead + bytesRead < sizeof(output)) {
+        //        memcpy(output + totalRead, buffer, bytesRead);
+        //        totalRead += bytesRead;
+        //    } else {
+        //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
+        //    }
+        //}
+
+        //CloseHandle(readPipe);
+
+        OutputDebugStringA("Waiting for ffmpeg pass 1...\n");
+        WaitForSingleObject(pi1.hProcess, INFINITE);
+        OutputDebugStringA("ffmpeg finished pass 1\n");
+
+        DWORD exitCode1 = 0;
+        GetExitCodeProcess(pi1.hProcess, &exitCode1);
+
+        CloseHandle(pi1.hProcess);
+        CloseHandle(pi1.hThread);
+
+        if (exitCode1 != 0) {
+            job->status = JobStatus::ERROR;
+            OutputDebugStringA("Exit code != 0 pass 1");
+            continue;
+        }
+
+        //job->status = JobStatus::DONE_COMPRESS;
+        //job->status = JobStatus::DONE_COMPRESS_PASS1; ?
+
+        // Pass 2
+        snprintf(cmd, sizeof(cmd),
+                 "%sffmpeg -y -hide_banner -loglevel error -stats "
+                 "-i %s -c:v libx264 -preset medium -b:v %.0fk "
+                 "-pass 2 "
+                 //"-pass 2 -passlogfile %s "
+                 "-c:a aac -b:a %.0fk -movflags +faststart %s",
+                 appState->ffmpegPath, job->input, videoKbps //, passLog
+                 ,
+                 audioKbps, job->output);
+
+        STARTUPINFOA si2 = {};
+        si2.cb = sizeof(si2);
+        //si.dwFlags = STARTF_USESTDHANDLES;
+        //si.hStdOutput = writePipe;
+        //si.hStdError = writePipe;
+
+        PROCESS_INFORMATION pi2 = {};
+
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 2 for job %d\n", i);
+            OutputDebugStringA(buf);
+        }
+
+        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                       nullptr, nullptr, &si2, &pi2);
+
+        //CloseHandle(writePipe);
+
+        if (!created2) {
+            OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            //CloseHandle(readPipe);
+            _InterlockedExchange(&appState->workerRunning, 0);
+            return 0;
+        }
+
+        //char buffer[256] = {};
+        //DWORD bytesRead = 0;
+
+        //char output[256] = {};
+        //DWORD totalRead = 0;
+
+        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        //       bytesRead > 0) {
+        //    if (totalRead + bytesRead < sizeof(output)) {
+        //        memcpy(output + totalRead, buffer, bytesRead);
+        //        totalRead += bytesRead;
+        //    } else {
+        //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
+        //    }
+        //}
+
+        //CloseHandle(readPipe);
+
+        OutputDebugStringA("Waiting for ffmpeg pass 2...\n");
+        WaitForSingleObject(pi2.hProcess, INFINITE);
+        OutputDebugStringA("ffmpeg finished pass 2\n");
+
+        DWORD exitCode2 = 0;
+        GetExitCodeProcess(pi2.hProcess, &exitCode2);
+
+        CloseHandle(pi2.hProcess);
+        CloseHandle(pi2.hThread);
+
+        if (exitCode2 != 0) {
+            job->status = JobStatus::ERROR;
+            OutputDebugStringA("Exit code != 0 pass 2");
+            continue;
+        }
+
+        job->status = JobStatus::DONE_COMPRESS;
     }
 
     _InterlockedExchange(&appState->workerRunning, 0);
@@ -440,6 +642,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
     /// END MENU
 
+    bool32 workerThreadRunning = _InterlockedCompareExchange(&appState->workerRunning, 0, 0) != 0;
+
     ImGui::TextDisabled("Drop video files anywhere on this window. Max %d", MAX_JOBS);
     ImGui::Separator();
 
@@ -454,7 +658,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                        "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(appState->jobCount == 0);
+    ImGui::BeginDisabled(workerThreadRunning || appState->jobCount == 0);
     if (ImGui::Button("Apply to all files")) {
         SetTargetSizeForAll(appState, *defaultTargetSize);
     }
@@ -478,10 +682,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     if (ImGui::Button("50 MB##default", ImVec2(80, 0))) {
         *defaultTargetSize = 50.0f;
     }
-
-    bool32 workerThreadRunning = _InterlockedCompareExchange(&appState->workerRunning, 0, 0) != 0;
-    // TODO: necessary or no?
-    //bool32 busy = false;
 
     /// Table
 
@@ -573,12 +773,13 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             *targetSize = ClampF32(*targetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
             ImGui::TableSetColumnIndex(3);
-            // TODO: just show for debugging
+
             const char* statusText = StatusText(static_cast<JobStatus>(job->status));
-            if (job->status == JobStatus::DONE_PROBE) {
-                ImGui::Text("%s: %.2f s", statusText, job->durationSeconds);
+            ImGui::TextUnformatted(statusText);
+            if (job->durationSeconds != 0.0f) {
+                ImGui::Text("Duration: %.1f s", job->durationSeconds);
             } else {
-                ImGui::TextUnformatted(statusText);
+                ImGui::TextUnformatted("Calculating...");
             }
 
             ImGui::TableSetColumnIndex(4);
