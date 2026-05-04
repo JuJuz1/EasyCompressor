@@ -274,6 +274,7 @@ WorkerThread(void* param) {
 
         // TODO: 4-5% is enough, 3% might be cutting it too close
         // TODO: for 10 MB 3% is good, for smaller targets might not be able to hit
+        // If target size is lass than 10 maybe then use like 5%
         f32 multiplier = 0.97f;
         f32 videoKbps = (totalKbps - audioKbps) * multiplier;
         if (videoKbps < 50.0f) {
@@ -437,6 +438,15 @@ WorkerThread(void* param) {
         }
 
         job->status = JobStatus::DONE_COMPRESS;
+
+        // TODO: We could probably get this from ffmpeg output also, but much easier this way
+        WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+        if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
+            u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
+            job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
+        } else {
+            OutputDebugStringA("Failed to get file size!\n");
+        }
     }
 
     _InterlockedExchange(&appState->workerRunning, 0);
@@ -794,9 +804,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             const char* statusText = StatusText(static_cast<JobStatus>(job->status));
             ImGui::TextUnformatted(statusText);
             if (job->status == JobStatus::DONE_COMPRESS) {
+                ImGui::SameLine();
                 if (ImGui::SmallButton("Open")) {
                     OpenInExplorer(hWnd, job->output);
                 }
+
+                ImGui::Text("Result size: %.1f MB", job->resultFileSize);
             }
 
             // TODO: show progress on probe duration and compression

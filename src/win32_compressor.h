@@ -19,8 +19,10 @@ struct UIJob {
     //volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
     f32 targetSizeMb;
 
-    f32 inputFileSize;   // Size of the video
+    f32 inputFileSize;
     f32 durationSeconds; // Probed from the video before compression (2 passes)
+
+    f32 resultFileSize;
 };
 
 #define MAX_JOBS 10
