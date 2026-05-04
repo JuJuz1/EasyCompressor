@@ -38,9 +38,12 @@ struct UIState {
 
 struct AppState {
     UIJob jobs[MAX_JOBS];
-    i32 jobCount;
-    volatile long workerRunning; // 0/1
-    volatile long cancelRequested;
+    volatile long jobCount;
+    // If we were to use condition variables instead of spin lock
+    //CONDITION_VARIABLE jobAvailable;
+    //CRITICAL_SECTION jobLock;
+    volatile long compressing;
+    //volatile long cancelRequested;
     HANDLE workerThread;
 
     f32 defaultTargetSize;
