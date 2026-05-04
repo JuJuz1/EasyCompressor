@@ -5,6 +5,7 @@
 
 enum JobStatus : u8 {
     QUEUED = 0,
+
     RUNNING_PROBE,
     DONE_PROBE,
     RUNNING_COMPRESS,
@@ -43,7 +44,7 @@ struct AppState {
     //CONDITION_VARIABLE jobAvailable;
     //CRITICAL_SECTION jobLock;
     volatile long compressing;
-    //volatile long cancelRequested;
+    volatile long cancelRequested;
     HANDLE workerThread;
 
     f32 defaultTargetSize;

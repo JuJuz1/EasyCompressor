@@ -1,11 +1,6 @@
-//
-//   - This file lives in the PLATFORM layer (the .exe), not the DLL.
-//   - It owns the queue and the worker thread.
-//   - It calls compressor.compress(&memory, &params) per job, exactly like
-//     your current main() does.
-//
-// File drop from Explorer: WM_DROPFILES via DragAcceptFiles().
-// Internal reorder: ImGui drag-drop payload between table rows.
+/*
+    A simple ImGui UI wrapper for compressing files using ffmpeg
+*/
 
 // TODO: UNICODE SUPPORT?
 
@@ -270,6 +265,7 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     // Pass 1
     char cmd[(MAX_PATH_COUNT * 2) + 128];
+    // TODO: different presets and h.264 and 265
     snprintf(cmd, sizeof(cmd),
              "%sffmpeg -y -hide_banner -loglevel error -stats "
              "-i %s -c:v libx264 -preset medium -b:v %.0fk "
@@ -440,6 +436,11 @@ WorkerThread(void* param) {
         if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
+                if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
+                    OutputDebugStringA("Cancelled compressing...");
+                    break;
+                }
+
                 UIJob* job = &appState->jobs[i];
                 // Allow compressing again
                 // TODO: should the default be this so every file gets compressed again?
@@ -468,12 +469,6 @@ StartBatch(AppState* appState) {
     // appState->compressing is read by WorkerThread
     _InterlockedExchange(&appState->compressing, 1);
     OutputDebugStringA("Start clicked\n");
-
-    // This is read by worker thread
-
-    //_InterlockedExchange(&appState->cancelRequested, 0);
-    //appState->workerThread =
-    //    reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, WorkerThread, appState, 0, nullptr));
 }
 
 // -----------------------------------------------------------------------------
@@ -604,7 +599,8 @@ ClampF32(f32 value, f32 min, f32 max) {
 
 static void
 CancelAfterCurrent(AppState* appState) {
-    OutputDebugStringA("Cancel after current\n");
+    _InterlockedExchange(&appState->cancelRequested, 1);
+    OutputDebugStringA("Cancel after current pressed!\n");
 }
 
 static void
@@ -647,8 +643,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::TextDisabled("Drop video files anywhere on this window. Max %d", MAX_JOBS);
     ImGui::Separator();
 
-    bool32 compressing = _InterlockedCompareExchange(&appState->compressing, 1, 1);
-    ImGui::TextDisabled("Compressing: %d", compressing);
+    bool32 compressing = _InterlockedCompareExchange(&appState->compressing, 0, 0);
+    bool32 cancelled = _InterlockedCompareExchange(&appState->cancelRequested, 0, 0);
+    bool32 noJobs = appState->jobCount == 0;
+    ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
 
     const i32 sliderWidth = 190;
 
@@ -661,7 +659,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                        "%.1f MB", ImGuiSliderFlags_Logarithmic);
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(compressing || appState->jobCount == 0);
+    ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Apply to all files")) {
         SetTargetSizeForAll(appState, *defaultTargetSize);
     }
@@ -703,7 +701,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     // At least for file info (size or duration or both???, both might not be feasible or even
     // necessary), target size and status
 
-    if (ImGui::BeginTable("queue", 6,
+    if (ImGui::BeginTable("jobs", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn(
@@ -854,7 +852,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
             //}
 
             ImGui::TableSetColumnIndex(5);
-            ImGui::BeginDisabled(jobRunning);
+            // TODO: If we use compressing here
+            // we disable removing any file while compressing any file
+            // It would be a bit tricky to allow only removing newly added jobs if they are added
+            // during compressing. Current workflow is canceling the compressing and then removing
+            // them, which is fine
+            ImGui::BeginDisabled(compressing || jobRunning);
             if (ImGui::SmallButton("X")) {
                 removeIndex = i;
             }
@@ -874,7 +877,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         }
     }
 
-    ImGui::BeginDisabled(compressing || appState->jobCount == 0);
+    ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Start", ImVec2(100, 0))) {
         StartBatch(appState);
     }
@@ -882,7 +885,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(!compressing || appState->jobCount == 0);
+    ImGui::BeginDisabled(!compressing || (compressing && appState->jobCount == 1) || cancelled ||
+                         noJobs);
     if (ImGui::Button("Cancel after current")) {
         CancelAfterCurrent(appState);
     }
@@ -890,7 +894,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::EndDisabled();
     ImGui::Separator();
 
-    ImGui::BeginDisabled(compressing || appState->jobCount == 0);
+    ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
         OutputDebugStringA("Clear\n");
         appState->jobCount = 0;
