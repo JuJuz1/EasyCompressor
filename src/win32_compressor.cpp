@@ -52,12 +52,13 @@
 static void
 AddJob(AppState* appState, const char* path) {
     if (appState->jobCount >= MAX_JOBS) {
-        OutputDebugStringA("Jobs full!\n");
+        DEBUG_PRINT("Jobs full!\n");
         return;
     }
 
+    // TODO: If we allow adding, have to think about the UX a bit more
     //if (_InterlockedCompareExchange(&appState->compressing, 1, 1)) {
-    //    OutputDebugStringA("Can't add job while compressing!\n");
+    //    DEBUG_PRINT("Can't add job while compressing!\n");
     //    return;
     //}
 
@@ -80,7 +81,7 @@ AddJob(AppState* appState, const char* path) {
     // No file extension found...
     // Don't fail but construct a default path without the extension but with _compressed
     if (!lastDot) {
-        OutputDebugStringA("Couldn't find file extension, constructed default path!\n");
+        DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
         snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
     } else {
         i32 extensionLen = StrLength(lastDot);
@@ -99,14 +100,11 @@ AddJob(AppState* appState, const char* path) {
         u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
         j->inputFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
     } else {
-        OutputDebugStringA("Failed to get file size!\n");
+        DEBUG_PRINT("Failed to get file size!\n");
     }
 
-    char buf[(MAX_PATH_COUNT * 2) + 256];
-    snprintf(buf, sizeof(buf),
-             "Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
-             appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
-    OutputDebugStringA(buf);
+    DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
+                 appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
 }
 
 static void
@@ -117,9 +115,7 @@ RemoveJob(AppState* appState, i32 index) {
         return;
     }
 
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Removed job %d\n", index);
-    OutputDebugStringA(buf);
+    DEBUG_PRINTF("Removed job %d\n", index);
 
     for (i32 i = index; i < appState->jobCount - 1; ++i) {
         appState->jobs[i] = appState->jobs[i + 1];
@@ -135,6 +131,7 @@ RemoveJob(AppState* appState, i32 index) {
 
 static void
 RunProbe(AppState* appState, UIJob* job, i32 i) {
+    ASSERT(job->status == JobStatus::QUEUED);
     job->status = JobStatus::RUNNING_PROBE;
 
     SECURITY_ATTRIBUTES sa = {};
@@ -145,7 +142,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
     HANDLE writePipe = nullptr;
 
     if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
-        OutputDebugStringA("Couldn't create pipe! Aborting all jobs!\n");
+        DEBUG_PRINT("Couldn't create pipe! Aborting all jobs!\n");
         job->status = JobStatus::ERROR;
         return;
     }
@@ -166,12 +163,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi = {};
 
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Creating process ffprobe for job %d\n", i);
-        OutputDebugStringA(buf);
-    }
-
+    DEBUG_PRINTF("Creating process ffprobe for job %d\n", i);
     // TODO: handle exiting the program more controlled
     // Now Windows decides if the process should finish or not
     BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
@@ -181,7 +173,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
     CloseHandle(writePipe);
 
     if (!created) {
-        OutputDebugStringA("Couldn't create process ffprobe! Aborting all jobs!\n");
+        DEBUG_PRINT("Couldn't create process ffprobe! Aborting all jobs!\n");
         job->status = JobStatus::ERROR;
         CloseHandle(readPipe);
         return;
@@ -199,15 +191,15 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
             CopyMemory(output + totalRead, buffer, bytesRead);
             totalRead += bytesRead;
         } else {
-            OutputDebugStringA("No space in buffer for ffprobe output!\n");
+            DEBUG_PRINT("No space in buffer for ffprobe output!\n");
         }
     }
 
     CloseHandle(readPipe);
 
-    OutputDebugStringA("Waiting for ffprobe...\n");
+    DEBUG_PRINT("Waiting for ffprobe...\n");
     WaitForSingleObject(pi.hProcess, INFINITE);
-    OutputDebugStringA("ffprobe finished\n");
+    DEBUG_PRINT("ffprobe finished\n");
 
     DWORD exitCode = 0;
     GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -229,6 +221,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 
 static void
 RunCompress(AppState* appState, UIJob* job, i32 i) {
+    ASSERT(job->status == JobStatus::DONE_PROBE);
     job->status = JobStatus::RUNNING_COMPRESS;
 
     f32 totalBits = job->targetSizeMb * 1024.0f * 1024.0f * 8.0f;
@@ -249,18 +242,15 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
     f32 multiplier = 0.97f;
     f32 videoKbps = (totalKbps - audioKbps) * multiplier;
     if (videoKbps < 50.0f) {
-        OutputDebugStringA("Target size too small for this video duration "
-                           "(video bitrate would be < 50 kbps)");
+        DEBUG_PRINT("Target size too small for this video duration "
+                    "(video bitrate would be < 50 kbps)");
         // TODO: cancel? and continue
     }
 
     {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-                 "Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f "
-                 "kbps\n",
-                 job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
-        OutputDebugStringA(buf);
+        DEBUG_PRINTF("Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f "
+                     "kbps\n",
+                     job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
     }
 
     // Pass 1
@@ -281,19 +271,14 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi1 = {};
 
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 1 for job %d\n", i);
-        OutputDebugStringA(buf);
-    }
-
+    DEBUG_PRINTF("Creating process ffmpeg pass 1 for job %d\n", i);
     BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
                                    nullptr, &si1, &pi1);
 
     //CloseHandle(writePipe);
 
     if (!created1) {
-        OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
+        DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
         job->status = JobStatus::ERROR;
         //CloseHandle(readPipe);
         return;
@@ -311,15 +296,15 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
     //        CopyMemory(output + totalRead, buffer, bytesRead);
     //        totalRead += bytesRead;
     //    } else {
-    //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
+    //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
     //    }
     //}
 
     //CloseHandle(readPipe);
 
-    OutputDebugStringA("Waiting for ffmpeg pass 1...\n");
+    DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
     WaitForSingleObject(pi1.hProcess, INFINITE);
-    OutputDebugStringA("ffmpeg finished pass 1\n");
+    DEBUG_PRINT("ffmpeg finished pass 1\n");
 
     DWORD exitCode1 = 0;
     GetExitCodeProcess(pi1.hProcess, &exitCode1);
@@ -329,7 +314,7 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     if (exitCode1 != 0) {
         job->status = JobStatus::ERROR;
-        OutputDebugStringA("Exit code != 0 pass 1");
+        DEBUG_PRINT("Exit code != 0 pass 1");
         return;
     }
 
@@ -355,19 +340,14 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi2 = {};
 
-    {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Creating process ffmpeg pass 2 for job %d\n", i);
-        OutputDebugStringA(buf);
-    }
-
+    DEBUG_PRINTF("Creating process ffmpeg pass 2 for job %d\n", i);
     BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
                                    nullptr, &si2, &pi2);
 
     //CloseHandle(writePipe);
 
     if (!created2) {
-        OutputDebugStringA("Couldn't create process ffmpeg! Aborting all jobs!\n");
+        DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
         job->status = JobStatus::ERROR;
         //CloseHandle(readPipe);
         return;
@@ -385,15 +365,15 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
     //        CopyMemory(output + totalRead, buffer, bytesRead);
     //        totalRead += bytesRead;
     //    } else {
-    //        OutputDebugStringA("No space in buffer for ffmpeg output!\n");
+    //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
     //    }
     //}
 
     //CloseHandle(readPipe);
 
-    OutputDebugStringA("Waiting for ffmpeg pass 2...\n");
+    DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
     WaitForSingleObject(pi2.hProcess, INFINITE);
-    OutputDebugStringA("ffmpeg finished pass 2\n");
+    DEBUG_PRINT("ffmpeg finished pass 2\n");
 
     DWORD exitCode2 = 0;
     GetExitCodeProcess(pi2.hProcess, &exitCode2);
@@ -403,7 +383,7 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     if (exitCode2 != 0) {
         job->status = JobStatus::ERROR;
-        OutputDebugStringA("Exit code != 0 pass 2");
+        DEBUG_PRINT("Exit code != 0 pass 2");
         return;
     }
 
@@ -415,7 +395,7 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
         u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
         job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
     } else {
-        OutputDebugStringA("Failed to get file size!\n");
+        DEBUG_PRINT("Failed to get file size!\n");
     }
 }
 
@@ -437,7 +417,7 @@ WorkerThread(void* param) {
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
-                    OutputDebugStringA("Cancelled compressing...");
+                    DEBUG_PRINT("Cancelled compressing...");
                     break;
                 }
 
@@ -468,7 +448,7 @@ StartBatch(AppState* appState) {
 
     // appState->compressing is read by WorkerThread
     _InterlockedExchange(&appState->compressing, 1);
-    OutputDebugStringA("Start clicked\n");
+    DEBUG_PRINT("Start clicked\n");
 }
 
 // -----------------------------------------------------------------------------
@@ -496,7 +476,7 @@ static void
 OpenInExplorer(HWND hWnd, const char* path) {
     char cmd[MAX_PATH_COUNT];
     snprintf(cmd, sizeof(cmd), "/select,\"%s\"", path);
-    ShellExecuteA(hWnd, "open", "explorer.exe", cmd, NULL, SW_SHOWNORMAL);
+    ShellExecuteA(hWnd, "open", "explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
 }
 
 static void
@@ -525,24 +505,20 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     // But taking a look at it, it's just so messy compared to this... (not a surprise though)
     if (GetSaveFileNameA(&ofn)) {
         CopyMemory(outPath, ofn.lpstrFile, MAX_PATH_COUNT);
-        char buf[MAX_PATH_COUNT + 32];
-        snprintf(buf, sizeof(buf), "Picked new output path: %s\n", outPath);
-        OutputDebugStringA(buf);
+        DEBUG_PRINTF("Picked new output path: %s\n", outPath);
     } else {
         DWORD err = CommDlgExtendedError();
-        char buf[64];
-        snprintf(buf, sizeof(buf), "CommDlgExtendedError in PickOutputPath: %u\n", err);
-        OutputDebugStringA(buf);
+        DEBUG_PRINTF("CommDlgExtendedError in PickOutputPath: %u\n", err);
 
         if (err == FNERR_BUFFERTOOSMALL) {
             // TODO: show errors for user here also
-            OutputDebugStringA("Buffer too small for output path!\n");
+            DEBUG_PRINT("Buffer too small for output path!\n");
             return;
         } else if (err == FNERR_INVALIDFILENAME) {
-            OutputDebugStringA("Invalid file name for output path!\n");
+            DEBUG_PRINT("Invalid file name for output path!\n");
             // TODO: handle?
         } else {
-            OutputDebugStringA("Cancelled pick output path dialog!\n");
+            DEBUG_PRINT("Cancelled pick output path dialog!\n");
         }
     }
 }
@@ -573,9 +549,7 @@ StatusText(JobStatus s) {
 
 static void
 SetTargetSizeForAll(AppState* appState, f32 targetSize) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "Set target size for all %.2f MB\n", targetSize);
-    OutputDebugStringA(buf);
+    DEBUG_PRINTF("Set target size for all %.2f MB\n", targetSize);
 
     for (i32 i = 0; i < appState->jobCount; ++i) {
         UIJob* job = &appState->jobs[i];
@@ -601,7 +575,7 @@ ClampF32(f32 value, f32 min, f32 max) {
 static void
 CancelAfterCurrent(AppState* appState) {
     _InterlockedExchange(&appState->cancelRequested, 1);
-    OutputDebugStringA("Cancel after current pressed!\n");
+    DEBUG_PRINT("Cancel after current pressed!\n");
 }
 
 static void
@@ -616,9 +590,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            //if (ImGui::MenuItem("Add files")) {
-            //    OutputDebugStringA("File -> Add files\n");
-            //}
+            if (ImGui::MenuItem("Add files")) {
+                DEBUG_PRINT("File -> Add files\n");
+            }
 
             if (ImGui::MenuItem("Exit")) {
                 PostQuitMessage(0);
@@ -630,7 +604,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("About")) {
                 uiState->helpAboutClicked = true;
-                OutputDebugStringA("About clicked\n");
+                DEBUG_PRINT("About clicked\n");
             }
 
             ImGui::EndMenu();
@@ -647,7 +621,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     bool32 compressing = _InterlockedCompareExchange(&appState->compressing, 0, 0);
     bool32 cancelled = _InterlockedCompareExchange(&appState->cancelRequested, 0, 0);
     bool32 noJobs = appState->jobCount == 0;
+
+#if COMPRESSOR_INTERNAL
     ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
+#endif
 
     const i32 sliderWidth = 190;
 
@@ -708,7 +685,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
         ImGui::TableSetupColumn(
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 114);
+        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 127);
         ImGui::TableSetupColumn("Target size", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
         ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
@@ -897,7 +874,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
     ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Clear", ImVec2(80, 0))) {
-        OutputDebugStringA("Clear\n");
+        DEBUG_PRINT("Clear\n");
         appState->jobCount = 0;
     }
 
@@ -1055,22 +1032,14 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // Get the path and get the copied amount, not including null terminator
             UINT copied = DragQueryFileA(drop, i, path, sizeof(path));
 
-            {
-                char buf[128];
-                snprintf(buf, sizeof(buf),
-                         "Required: %u, copied %u (both not including null terminator)\n", required,
+            DEBUG_PRINTF("Required: %u, copied %u (both not including null terminator)\n", required,
                          copied);
-                OutputDebugStringA(buf);
-            }
 
             // required > copied would work as well
             if (required >= sizeof(path)) {
-                char buf[MAX_PATH_COUNT + 128];
-                snprintf(buf, sizeof(buf),
-                         "Path was truncated, didn't add job! Max length: %d\nPath would have "
-                         "been %s\n",
-                         MAX_PATH_COUNT, path);
-                OutputDebugStringA(buf);
+                DEBUG_PRINTF("Path was truncated, didn't add job! Max length: %d\nPath would have "
+                             "been %s\n",
+                             MAX_PATH_COUNT, path);
                 // TODO: show error for user for discarded files
                 continue;
             }
@@ -1121,7 +1090,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                                 nullptr };
 
     if (!RegisterClassExA(&windowClass)) {
-        OutputDebugStringA("Failed to register windowClass!\n");
+        DEBUG_PRINT("Failed to register windowClass!\n");
         return 0;
     }
 
@@ -1131,7 +1100,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                         nullptr, nullptr, hInstance, nullptr);
 
     if (!hWnd) {
-        OutputDebugStringA("Failed to create windowHandle!\n");
+        DEBUG_PRINT("Failed to create windowHandle!\n");
         return 0;
     }
 
@@ -1170,7 +1139,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     // Start worker thread
     HANDLE workerThread = CreateThread(0, 0, WorkerThread, &appState, 0, 0);
     if (!workerThread) {
-        OutputDebugStringA("Couldn't create WorkerThread");
+        DEBUG_PRINT("Couldn't create WorkerThread");
         return 0;
     }
 
@@ -1178,7 +1147,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     // Test data
 #if COMPRESSOR_INTERNAL
-    OutputDebugStringA("Adding test files at startup...\n");
+    DEBUG_PRINT("Adding test files at startup...\n");
     GetExeDirectory(&appState);
 
     char testPath1[MAX_PATH_COUNT];
