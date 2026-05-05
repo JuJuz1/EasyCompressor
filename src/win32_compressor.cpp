@@ -670,7 +670,7 @@ CancelAfterCurrent(AppState* appState) {
 }
 
 static void
-DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
+DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
     UIState* uiState = &appState->uiState;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -717,7 +717,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
 #endif
 
-    const i32 sliderWidth = 190;
+    const f32 sliderWidth = 190 * scale;
 
     /// Default target size
 
@@ -752,7 +752,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
 
         char label[32];
         snprintf(label, sizeof(label), "%.1f MB##default_%d", size, i);
-        if (ImGui::Button(label, ImVec2(80, 0))) {
+        if (ImGui::Button(label, ImVec2(80 * scale, 0))) {
             *defaultTargetSize = size;
         }
     }
@@ -767,11 +767,11 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                               ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
         ImGui::TableSetupColumn(
-            "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20);
+            "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20 * scale);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 127);
+        ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 127 * scale);
         ImGui::TableSetupColumn("Target size", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168 * scale);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
@@ -940,7 +940,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     }
 
     ImGui::BeginDisabled(compressing || noJobs);
-    if (ImGui::Button("Start", ImVec2(100, 0))) {
+    if (ImGui::Button("Start", ImVec2(100 * scale, 0))) {
         StartBatch(appState);
     }
 
@@ -957,7 +957,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::Separator();
 
     ImGui::BeginDisabled(compressing || noJobs);
-    if (ImGui::Button("Clear", ImVec2(80, 0))) {
+    if (ImGui::Button("Clear", ImVec2(80 * scale, 0))) {
         DEBUG_PRINT("Clear\n");
         appState->jobCount = 0;
     }
@@ -1187,7 +1187,7 @@ CreateDefaultConfigFile(const char* path) {
 }
 
 static bool32
-LoadConfigFile(AppState* appState, const char* name, f32* defaultTargetSizes) {
+LoadConfigFile(AppState* appState, const char* name) {
     HANDLE file = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, 0);
     if (!file) {
@@ -1362,11 +1362,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    (void)io;
 
-    ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
+
+    auto style = ImGui::GetStyle();
+    style.ScaleAllSizes(mainScale);
+    //style.FontScaleDpi = mainScale;
+    io.ConfigDpiScaleFonts = true; // Automatically scales fonts
 
     AppState appState = {};
     GetExeDirectory(&appState);
@@ -1376,16 +1379,16 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     /// Config file
 
     const char* configFilename = "easycompressor.cfg";
-    f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
-    bool32 loaded = LoadConfigFile(&appState, configFilename, defaultTargetSizes);
+    bool32 loaded = LoadConfigFile(&appState, configFilename);
     if (!loaded) {
         // TODO: abs path?
         bool32 created = CreateDefaultConfigFile(configFilename);
         if (created) {
             DEBUG_PRINT("Loading just created config file...\n");
-            LoadConfigFile(&appState, configFilename, defaultTargetSizes);
+            LoadConfigFile(&appState, configFilename);
         } else {
             DEBUG_PRINT("Fallback to using default target sizes...\n");
+            f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
             CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
             appState.defaultTargetSize = defaultTargetSizes[1];
         }
@@ -1471,7 +1474,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        DrawUi(&appState, hInstance, hWnd);
+        DrawUi(&appState, hInstance, hWnd, mainScale);
         auto uiEnd = GetWallClock();
         f64 uiMs = GetMsElapsed(uiStart, uiEnd);
 
