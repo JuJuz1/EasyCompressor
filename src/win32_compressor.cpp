@@ -1364,9 +1364,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
-    auto style = ImGui::GetStyle();
+    // auto would default to a copy instead of a reference... found this out the hard way
+    // Didn't know this but I guess it makes sense, why doesn't the compiler warn about it...
+    auto& style = ImGui::GetStyle();
     style.ScaleAllSizes(mainScale);
-    auto io = ImGui::GetIO();
+    auto& io = ImGui::GetIO();
     io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
 
     AppState appState = {};
