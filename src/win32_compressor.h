@@ -3,31 +3,6 @@
 // Has to be enough, including null terminator
 #define MAX_PATH_COUNT 2048
 
-#if COMPRESSOR_DEBUG
-
-static void
-DEBUG_PRINT(const char* msg) {
-    OutputDebugStringA(msg);
-}
-
-static void
-DEBUG_PRINTF(const char* fmt, ...) {
-    // TODO: for my debug purposes this is enough
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    OutputDebugStringA(buf);
-}
-
-#else
-#    define DEBUG_PRINT(...)
-#    define DEBUG_PRINTF(...)
-
-#endif
-
 enum JobStatus : u8 {
     QUEUED = 0,
 

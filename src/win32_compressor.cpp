@@ -49,6 +49,44 @@
 
 #include "win32_compressor.h"
 
+/// Printing
+
+#if COMPRESSOR_DEBUG
+
+static void
+DEBUG_PRINT(const char* msg) {
+    OutputDebugStringA(msg);
+}
+
+static void
+DEBUG_PRINTF(const char* fmt, ...) {
+    // TODO: for my debug purposes this is enough
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    OutputDebugStringA(buf);
+}
+
+#else
+#    define DEBUG_PRINT(...)
+#    define DEBUG_PRINTF(...)
+
+#endif
+
+static void
+PRINTF(const char* fmt, ...) {
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    OutputDebugStringA(buf);
+}
+
 static void
 AddJob(AppState* appState, const char* path) {
     if (appState->jobCount >= MAX_JOBS) {
@@ -1069,6 +1107,22 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcA(hWnd, msg, wParam, lParam);
 }
 
+// Frequency
+static i64 gPerfFreq;
+
+static LARGE_INTEGER
+GetWallClock() {
+    LARGE_INTEGER result;
+    QueryPerformanceCounter(&result);
+    return result;
+}
+
+static f64
+GetMsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
+    f64 result = (static_cast<f64>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0;
+    return result;
+}
+
 int WINAPI
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -1160,9 +1214,19 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     AddJob(&appState, testPath2);
 #endif
 
+    /// Performance statistics
+    LARGE_INTEGER freqCounter;
+    QueryPerformanceFrequency(&freqCounter);
+    gPerfFreq = freqCounter.QuadPart;
+
+    auto lastCounter = GetWallClock();
+    u64 lastCycleCount{ __rdtsc() };
+
     bool32 running = true;
 
     while (running) {
+        auto frameStart = GetWallClock();
+
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -1171,6 +1235,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 running = false;
             }
         }
+
+        auto msgEnd = GetWallClock();
+        f64 msgMs = GetMsElapsed(frameStart, msgEnd);
 
         if (!running) {
             break;
@@ -1192,11 +1259,16 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             CreateRenderTarget();
         }
 
+        auto uiStart = GetWallClock();
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
         DrawUi(&appState, hInstance, hWnd);
+        auto uiEnd = GetWallClock();
+        f64 uiMs = GetMsElapsed(uiStart, uiEnd);
+
+        auto renderStart = GetWallClock();
         ImGui::Render();
 
         //const float clearColorWithAlpha[4] = { clearColor.x * clearColor.w,
@@ -1205,7 +1277,31 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         gContext->OMSetRenderTargets(1, &gRtv, nullptr);
         //gContext->ClearRenderTargetView(gRtv, clearColorWithAlpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        gSwap->Present(1, 0);
+        auto renderEnd = GetWallClock();
+        f64 renderMs = GetMsElapsed(renderStart, renderEnd);
+
+        /// Frame work end
+
+        auto frameEnd = GetWallClock();
+        f64 frameMs = GetMsElapsed(frameStart, frameEnd);
+        //lastCounter = frameEnd;
+        f64 fps = 1000.0 / frameMs;
+
+        // RDTSC
+        u64 endCycleCount = __rdtsc();
+        f64 cycleElapsedM = static_cast<f64>(endCycleCount - lastCycleCount) / (1000 * 1000);
+        lastCycleCount = endCycleCount;
+
+        auto presentStart = GetWallClock();
+        gSwap->Present(1, 0); // (1, 0) -> vsync, otherwise we hog the cpu quite a lot
+        auto presentEnd = GetWallClock();
+        f64 presentMs = GetMsElapsed(presentStart, presentEnd);
+
+#if 0
+        PRINTF("frame: %.5f ms | msg: %.5f ms | ui: %.5f ms | render: %.5f ms | present: "
+               "%.5f ms\nFPS: %.0f | cycles: %.4f M\n",
+               frameMs, msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
+#endif
     }
 
     ImGui_ImplDX11_Shutdown();
