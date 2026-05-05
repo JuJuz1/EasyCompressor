@@ -87,6 +87,47 @@ PRINTF(const char* fmt, ...) {
     OutputDebugStringA(buf);
 }
 
+// Frequency
+static i64 gPerfFreq;
+
+static LARGE_INTEGER
+GetWallClock() {
+    LARGE_INTEGER result;
+    QueryPerformanceCounter(&result);
+    return result;
+}
+
+static f64
+GetMsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
+    f64 result = (static_cast<f64>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0;
+    return result;
+}
+
+struct ScopedTimer {
+    LARGE_INTEGER start;
+    const char* name;
+    bool32 inSeconds;
+
+    ScopedTimer(bool32 inSeconds = false) : name(""), inSeconds(inSeconds) {
+        start = GetWallClock();
+    }
+
+    ScopedTimer(const char* n, bool32 inSeconds = false) : name(n), inSeconds(inSeconds) {
+        start = GetWallClock();
+    }
+
+    ~ScopedTimer() {
+        auto end = GetWallClock();
+        f64 ms = GetMsElapsed(start, end);
+        if (inSeconds) {
+            ms /= 1000.0;
+            PRINTF("%s: %.2f s\n", name, ms);
+        } else {
+            PRINTF("%s: %.3f ms\n", name, ms);
+        }
+    }
+};
+
 static void
 AddJob(AppState* appState, const char* path) {
     if (appState->jobCount >= MAX_JOBS) {
@@ -169,6 +210,7 @@ RemoveJob(AppState* appState, i32 index) {
 
 static void
 RunProbe(AppState* appState, UIJob* job, i32 i) {
+    PRINTF("Start RunProbe for job %d\n", i);
     ASSERT(job->status == JobStatus::QUEUED);
     job->status = JobStatus::RUNNING_PROBE;
 
@@ -201,7 +243,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi = {};
 
-    DEBUG_PRINTF("Creating process ffprobe for job %d\n", i);
+    //DEBUG_PRINTF("Creating process ffprobe for job %d\n", i);
     // TODO: handle exiting the program more controlled
     // Now Windows decides if the process should finish or not
     BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
@@ -235,9 +277,9 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 
     CloseHandle(readPipe);
 
-    DEBUG_PRINT("Waiting for ffprobe...\n");
+    //DEBUG_PRINT("Waiting for ffprobe...\n");
     WaitForSingleObject(pi.hProcess, INFINITE);
-    DEBUG_PRINT("ffprobe finished\n");
+    //DEBUG_PRINT("ffprobe finished\n");
 
     DWORD exitCode = 0;
     GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -259,7 +301,8 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 
 static void
 RunCompress(AppState* appState, UIJob* job, i32 i) {
-    ASSERT(job->status == JobStatus::DONE_PROBE);
+    PRINTF("Start RunCompress for job %d\n", i);
+    ASSERT(job->status == JobStatus::DONE_PROBE || job->status == JobStatus::DONE_COMPRESS);
     job->status = JobStatus::RUNNING_COMPRESS;
 
     f32 totalBits = job->targetSizeMb * 1024.0f * 1024.0f * 8.0f;
@@ -309,40 +352,43 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi1 = {};
 
-    DEBUG_PRINTF("Creating process ffmpeg pass 1 for job %d\n", i);
-    BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                                   nullptr, &si1, &pi1);
+    //DEBUG_PRINTF("Creating process ffmpeg pass 1 for job %d\n", i);
+    {
+        ScopedTimer t = { "Pass 1", true };
+        BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                       nullptr, nullptr, &si1, &pi1);
 
-    //CloseHandle(writePipe);
+        //CloseHandle(writePipe);
 
-    if (!created1) {
-        DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
-        job->status = JobStatus::ERROR;
+        if (!created1) {
+            DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            //CloseHandle(readPipe);
+            return;
+        }
+
+        //char buffer[256] = {};
+        //DWORD bytesRead = 0;
+
+        //char output[256] = {};
+        //DWORD totalRead = 0;
+
+        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        //       bytesRead > 0) {
+        //    if (totalRead + bytesRead < sizeof(output)) {
+        //        CopyMemory(output + totalRead, buffer, bytesRead);
+        //        totalRead += bytesRead;
+        //    } else {
+        //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
+        //    }
+        //}
+
         //CloseHandle(readPipe);
-        return;
+
+        DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
+        WaitForSingleObject(pi1.hProcess, INFINITE);
+        //DEBUG_PRINT("ffmpeg finished pass 1\n");
     }
-
-    //char buffer[256] = {};
-    //DWORD bytesRead = 0;
-
-    //char output[256] = {};
-    //DWORD totalRead = 0;
-
-    //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
-    //       bytesRead > 0) {
-    //    if (totalRead + bytesRead < sizeof(output)) {
-    //        CopyMemory(output + totalRead, buffer, bytesRead);
-    //        totalRead += bytesRead;
-    //    } else {
-    //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
-    //    }
-    //}
-
-    //CloseHandle(readPipe);
-
-    DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
-    WaitForSingleObject(pi1.hProcess, INFINITE);
-    DEBUG_PRINT("ffmpeg finished pass 1\n");
 
     DWORD exitCode1 = 0;
     GetExitCodeProcess(pi1.hProcess, &exitCode1);
@@ -378,40 +424,43 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     PROCESS_INFORMATION pi2 = {};
 
-    DEBUG_PRINTF("Creating process ffmpeg pass 2 for job %d\n", i);
-    BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                                   nullptr, &si2, &pi2);
+    //DEBUG_PRINTF("Creating process ffmpeg pass 2 for job %d\n", i);
+    {
+        ScopedTimer t = { "Pass 1", true };
+        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                       nullptr, nullptr, &si2, &pi2);
 
-    //CloseHandle(writePipe);
+        //CloseHandle(writePipe);
 
-    if (!created2) {
-        DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
-        job->status = JobStatus::ERROR;
+        if (!created2) {
+            DEBUG_PRINT("Couldn't create process ffmpeg! Aborting all jobs!\n");
+            job->status = JobStatus::ERROR;
+            //CloseHandle(readPipe);
+            return;
+        }
+
+        //char buffer[256] = {};
+        //DWORD bytesRead = 0;
+
+        //char output[256] = {};
+        //DWORD totalRead = 0;
+
+        //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        //       bytesRead > 0) {
+        //    if (totalRead + bytesRead < sizeof(output)) {
+        //        CopyMemory(output + totalRead, buffer, bytesRead);
+        //        totalRead += bytesRead;
+        //    } else {
+        //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
+        //    }
+        //}
+
         //CloseHandle(readPipe);
-        return;
+
+        DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
+        WaitForSingleObject(pi2.hProcess, INFINITE);
+        //DEBUG_PRINT("ffmpeg finished pass 2\n");
     }
-
-    //char buffer[256] = {};
-    //DWORD bytesRead = 0;
-
-    //char output[256] = {};
-    //DWORD totalRead = 0;
-
-    //while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
-    //       bytesRead > 0) {
-    //    if (totalRead + bytesRead < sizeof(output)) {
-    //        CopyMemory(output + totalRead, buffer, bytesRead);
-    //        totalRead += bytesRead;
-    //    } else {
-    //        DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
-    //    }
-    //}
-
-    //CloseHandle(readPipe);
-
-    DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
-    WaitForSingleObject(pi2.hProcess, INFINITE);
-    DEBUG_PRINT("ffmpeg finished pass 2\n");
 
     DWORD exitCode2 = 0;
     GetExitCodeProcess(pi2.hProcess, &exitCode2);
@@ -447,12 +496,14 @@ WorkerThread(void* param) {
         for (i32 i = 0; i < jobCount; ++i) {
             UIJob* job = &appState->jobs[i];
             if (job->status == JobStatus::QUEUED) {
+                ScopedTimer t = {};
                 RunProbe(appState, job, i);
+                PRINTF("RunProbe for job %d", i);
             }
         }
 
         if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
-            jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
+            i32 jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
                     DEBUG_PRINT("Cancelled compressing...");
@@ -462,12 +513,14 @@ WorkerThread(void* param) {
                 UIJob* job = &appState->jobs[i];
                 // Allow compressing again
                 // TODO: should the default be this so every file gets compressed again?
-                // OR the user can choose if just compressed files should be skipped or compressed
-                // again. This covers both the cases of adding files when compressing and not
-                // compressing
+                // OR the user can choose if just compressed files should be skipped or
+                // compressed again. This covers both the cases of adding files when compressing
+                // and not compressing
                 if (job->status == JobStatus::DONE_PROBE ||
                     job->status == JobStatus::DONE_COMPRESS) {
+                    ScopedTimer t = { true };
                     RunCompress(appState, job, i);
+                    PRINTF("RunCompress for job %d", i);
                 }
             }
 
@@ -1105,22 +1158,6 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     return DefWindowProcA(hWnd, msg, wParam, lParam);
-}
-
-// Frequency
-static i64 gPerfFreq;
-
-static LARGE_INTEGER
-GetWallClock() {
-    LARGE_INTEGER result;
-    QueryPerformanceCounter(&result);
-    return result;
-}
-
-static f64
-GetMsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
-    f64 result = (static_cast<f64>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0;
-    return result;
 }
 
 int WINAPI
