@@ -76,6 +76,7 @@ DEBUG_PRINTF(const char* fmt, ...) {
 
 #endif
 
+// Used in both debug and release
 static void
 PRINTF(const char* fmt, ...) {
     char buf[512];
@@ -209,8 +210,7 @@ RemoveJob(AppState* appState, i32 index) {
 // -----------------------------------------------------------------------------
 
 static void
-RunProbe(AppState* appState, UIJob* job, i32 i) {
-    PRINTF("Start RunProbe for job %d\n", i);
+RunProbe(AppState* appState, UIJob* job) {
     ASSERT(job->status == JobStatus::QUEUED);
     job->status = JobStatus::RUNNING_PROBE;
 
@@ -300,8 +300,7 @@ RunProbe(AppState* appState, UIJob* job, i32 i) {
 }
 
 static void
-RunCompress(AppState* appState, UIJob* job, i32 i) {
-    PRINTF("Start RunCompress for job %d\n", i);
+RunCompress(AppState* appState, UIJob* job) {
     ASSERT(job->status == JobStatus::DONE_PROBE || job->status == JobStatus::DONE_COMPRESS);
     job->status = JobStatus::RUNNING_COMPRESS;
 
@@ -426,7 +425,7 @@ RunCompress(AppState* appState, UIJob* job, i32 i) {
 
     //DEBUG_PRINTF("Creating process ffmpeg pass 2 for job %d\n", i);
     {
-        ScopedTimer t = { "Pass 1", true };
+        ScopedTimer t = { "Pass 2", true };
         BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                                        nullptr, nullptr, &si2, &pi2);
 
@@ -497,13 +496,13 @@ WorkerThread(void* param) {
             UIJob* job = &appState->jobs[i];
             if (job->status == JobStatus::QUEUED) {
                 ScopedTimer t = {};
-                RunProbe(appState, job, i);
+                RunProbe(appState, job);
                 PRINTF("RunProbe for job %d", i);
             }
         }
 
         if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
-            i32 jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
+            jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
                     DEBUG_PRINT("Cancelled compressing...");
@@ -519,7 +518,8 @@ WorkerThread(void* param) {
                 if (job->status == JobStatus::DONE_PROBE ||
                     job->status == JobStatus::DONE_COMPRESS) {
                     ScopedTimer t = { true };
-                    RunCompress(appState, job, i);
+                    PRINTF("Start RunCompress for job %d\n", i);
+                    RunCompress(appState, job);
                     PRINTF("RunCompress for job %d", i);
                 }
             }
@@ -551,7 +551,7 @@ GetExeDirectory(AppState* appState) {
     GetModuleFileNameA(0, appState->exeDir, sizeof(appState->exeDir));
 
     i32 lastSlashIndex = -1;
-    char* scan = appState->exeDir;
+    const char* scan = appState->exeDir;
     for (i32 i = 0; *scan; ++scan, ++i) {
         if (*scan == PATH_SEP) {
             lastSlashIndex = i;
@@ -739,29 +739,22 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd) {
     ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.2f MB");
     *defaultTargetSize = ClampF32(*defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
-    // TODO: read from config file and be able to save a preset for the default?
-    if (ImGui::Button("5 MB##default", ImVec2(80, 0))) {
-        *defaultTargetSize = 5.0f;
-    }
+    for (i32 i = 0; i < ARRAY_COUNT(appState->targetSizes); ++i) {
+        f32 size = appState->targetSizes[i];
+        // Default value which is filled if the user supplied less than SIZES_COUNT
+        if (size == 0.0f) {
+            continue;
+        }
 
-    ImGui::SameLine();
-    if (ImGui::Button("10 MB##default", ImVec2(80, 0))) {
-        *defaultTargetSize = 10.0f;
-    }
+        if (i != 0) {
+            ImGui::SameLine();
+        }
 
-    ImGui::SameLine();
-    if (ImGui::Button("25 MB##default", ImVec2(80, 0))) {
-        *defaultTargetSize = 25.0f;
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("50 MB##default", ImVec2(80, 0))) {
-        *defaultTargetSize = 50.0f;
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("100 MB##default", ImVec2(80, 0))) {
-        *defaultTargetSize = 100.0f;
+        char label[32];
+        snprintf(label, sizeof(label), "%.1f MB##default_%d", size, i);
+        if (ImGui::Button(label, ImVec2(80, 0))) {
+            *defaultTargetSize = size;
+        }
     }
 
     /// Table
@@ -1160,6 +1153,164 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcA(hWnd, msg, wParam, lParam);
 }
 
+static bool32
+CreateDefaultConfigFile(const char* path) {
+    DEBUG_PRINT("Trying to create default config file...\n");
+    HANDLE file =
+        CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (!file) {
+        DEBUG_PRINT("Couldn't create default config file!\n");
+        return false;
+    }
+
+    char content[] =
+        "# IMPORTANT: don't change anything inside this file except the sizes!\n\n"
+        "# You can specify up to 5 preset sizes the app loads when it starts, only the "
+        "first 5 are used\n"
+        "# Append ! after a value to signal it as the default value\n"
+        "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
+        "range are clamped\n\n"
+        "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n";
+
+    DWORD written = 0;
+    // Don't write null terminator
+    WriteFile(file, content, sizeof(content) - 1, &written, nullptr);
+    if (written == 0) {
+        DEBUG_PRINT("Couldn't write to default config file!\n");
+        CloseHandle(file);
+        return false;
+    }
+
+    DEBUG_PRINT("Created default config file!\n");
+    CloseHandle(file);
+    return true;
+}
+
+static bool32
+LoadConfigFile(AppState* appState, const char* name, f32* defaultTargetSizes) {
+    HANDLE file = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, 0);
+    if (!file) {
+        DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
+        return false;
+    }
+
+    char buf[512];
+    DWORD bytesRead = 0;
+
+    if (!ReadFile(file, buf, sizeof(buf), &bytesRead, nullptr) || bytesRead == 0) {
+        DEBUG_PRINT("Couldn't read file!\n");
+        CloseHandle(file);
+        return false;
+    }
+
+    buf[bytesRead] = '\0';
+
+    i32 sizesParsed = 0;
+    bool32 inSizes = false;
+    bool32 foundDefault = false;
+    const char* p = buf;
+
+    i32 sizesCount = ARRAY_COUNT(appState->targetSizes);
+
+    // Currently handles whitespace and other characters at the end only
+    // I think this is fine
+    while (*p) {
+        while (*p == ' ' || *p == '\r' || *p == '\n') {
+            ++p;
+        }
+
+        // Comments
+        if (*p == '#') {
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            continue;
+        }
+
+        // Section
+        if (*p == '[') {
+            if (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
+                p[6] == ']') {
+                inSizes = true;
+            } else {
+                inSizes = false;
+            }
+
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            continue;
+        }
+
+        if (inSizes) {
+            f32 value = static_cast<f32>(atof(p));
+            if (value != 0.0f || (*p >= '0' && *p <= '9')) {
+                f32 oldValue = value;
+                value = ClampF32(value, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
+                if (oldValue != value) {
+                    DEBUG_PRINTF("Clamped %.2f to %.2f\n", oldValue, value);
+                }
+
+                if (sizesParsed == sizesCount) {
+                    DEBUG_PRINTF("Tried to parse more than %d sizes, SUCCESS\n", sizesCount);
+                    break;
+                }
+
+                appState->targetSizes[sizesParsed++] = value;
+                DEBUG_PRINTF("Parsed size: %.2f\n", value);
+
+                if (!foundDefault) {
+                    const char* start = p;
+                    while (*p && *p != '\n') {
+                        ++p;
+                    }
+
+                    bool32 isDefault = false;
+                    for (const char* t = start; t < p; ++t) {
+                        if (*t == '!') {
+                            isDefault = true;
+                            break;
+                        }
+                    }
+
+                    if (isDefault) {
+                        foundDefault = true;
+                        DEBUG_PRINTF("Found default target size of %.2f!\n", value);
+                        appState->defaultTargetSize = value;
+                    }
+                }
+            }
+        }
+
+        while (*p && *p != '\n') {
+            ++p;
+        }
+    }
+
+    CloseHandle(file);
+
+    // User added some sizes but not the full amount
+    // We consider having 0 target sizes a failure
+    if (sizesParsed > 0 && sizesParsed < sizesCount) {
+        i32 remaining = sizesCount - sizesParsed;
+        DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
+        if (!foundDefault) {
+            // Set the first user-supplied size as the default
+            f32 defaultSize = appState->targetSizes[0];
+            DEBUG_PRINTF("Didn't find default, setting it to %.2f\n", defaultSize, 0);
+            appState->defaultTargetSize = defaultSize;
+        }
+
+        sizesParsed = sizesCount;
+    }
+
+    bool32 success = sizesParsed == sizesCount;
+    return success;
+}
+
 int WINAPI
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -1217,11 +1368,29 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
-    //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     AppState appState = {};
+    GetExeDirectory(&appState);
+    DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
     //GetFFMpegPath(&pathInfo);
 
-    appState.defaultTargetSize = DEFAULT_TARGET_SIZE;
+    /// Config file
+
+    const char* configFilename = "easycompressor.cfg";
+    f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
+    bool32 loaded = LoadConfigFile(&appState, configFilename, defaultTargetSizes);
+    if (!loaded) {
+        // TODO: abs path?
+        bool32 created = CreateDefaultConfigFile(configFilename);
+        if (created) {
+            DEBUG_PRINT("Loading just created config file...\n");
+            LoadConfigFile(&appState, configFilename, defaultTargetSizes);
+        } else {
+            DEBUG_PRINT("Fallback to using default target sizes...\n");
+            CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
+            appState.defaultTargetSize = defaultTargetSizes[1];
+        }
+    }
+
     gAppState = &appState;
 
     // TODO: support package managers so read from PATH
@@ -1236,10 +1405,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     appState.workerThread = workerThread;
 
-    // Test data
+// Test data
 #if COMPRESSOR_INTERNAL
     DEBUG_PRINT("Adding test files at startup...\n");
-    GetExeDirectory(&appState);
 
     char testPath1[MAX_PATH_COUNT];
     char testPath2[MAX_PATH_COUNT];
@@ -1260,6 +1428,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     u64 lastCycleCount{ __rdtsc() };
 
     bool32 running = true;
+
+    //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     while (running) {
         auto frameStart = GetWallClock();

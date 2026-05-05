@@ -29,10 +29,12 @@ struct UIJob {
 #define MAX_JOBS 10
 
 // All in MB
-#define DEFAULT_TARGET_SIZE 10.0f
 #define MIN_TARGET_SIZE 0.5f
 #define MAX_TARGET_SIZE 5000.0f
 
+#define SIZES_COUNT 5
+
+// Mainly for popup dialogs
 struct UIState {
     bool32 helpAboutClicked;
 };
@@ -48,6 +50,7 @@ struct AppState {
     HANDLE workerThread;
 
     f32 defaultTargetSize;
+    f32 targetSizes[SIZES_COUNT];
 
     // All UI state with ImGui
     UIState uiState;

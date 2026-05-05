@@ -29,6 +29,8 @@ typedef double f64;
 #endif
 // clang-format on
 
+#define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+
 static i32
 StrLength(const char* str) {
     ASSERT(str);
