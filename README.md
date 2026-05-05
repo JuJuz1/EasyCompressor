@@ -1,13 +1,10 @@
 # EasyCompress
 
-A simple C CLI that compresses any video to a target file size using FFmpeg
-
-```
-compress <input> <output> <target_size_MB>
-```
+A native Windows C++ application that compresses any video to a target file size using FFmpeg
 
 The end goal for this project is to act as a native desktop application replacement for this
-compression website I have used https://www.freeconvert.com/video-compressor
+compression website I have used https://www.freeconvert.com/video-compressor This way we can take
+advantage of the precious hardware each one of us has!
 
 ## Requirements
 
@@ -27,8 +24,8 @@ named "vendor" and inside that named "ffmpeg". Then copy all the contents of the
 
 Version used: 1.92.7-docking
 
-- Download from: https://github.com/ocornut/imgui/tags and drop into "vendor/imgui". Make sure
-  the folder names are correct, so remove the version
+- Download from: https://github.com/ocornut/imgui/tags and drop into "vendor/imgui". Make sure the
+  folder names are correct, so remove the version
 
 ## Build
 
@@ -47,6 +44,7 @@ build.bat
 - If the requested size is too small for the video's length (would force video bitrate < 50 kbps),
   the tool aborts rather than produce garbage
 - Audio is re-encoded to AAC at 128 kbps (scaled to 64/32 kbps for very small targets)
-- Output container is inferred from the output file extension. `.mp4` is the safe default
-- Two passlog files (`compress_2pass-0.log*`) are created in the working directory during encoding
-  and removed on success
+- Output container is deduced from the input file path. The app appends _compressed to the input
+  file name
+<!--- Two passlog files (`compress_2pass-0.log*`) are created in the working directory during encoding
+  and removed on success-->

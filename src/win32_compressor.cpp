@@ -1106,7 +1106,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
         // TODO: validate by most common video file extensions?
-        for (i32 i = 0; i < fileCount && i < MAX_JOBS; ++i) {
+        for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
             char path[MAX_PATH_COUNT];
             // Query the required character amount first, not including null terminator
             // If we don't query we have no way of deducing if the path was truncated or it's
@@ -1295,7 +1295,6 @@ LoadConfigFile(AppState* appState, const char* name) {
     // User added some sizes but not the full amount
     // We consider having 0 target sizes a failure
     if (sizesParsed > 0 && sizesParsed < sizesCount) {
-        i32 remaining = sizesCount - sizesParsed;
         DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
         if (!foundDefault) {
             // Set the first user-supplied size as the default
@@ -1361,15 +1360,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
 
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
     auto style = ImGui::GetStyle();
     style.ScaleAllSizes(mainScale);
-    //style.FontScaleDpi = mainScale;
-    io.ConfigDpiScaleFonts = true; // Automatically scales fonts
+    auto io = ImGui::GetIO();
+    io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
 
     AppState appState = {};
     GetExeDirectory(&appState);
@@ -1511,6 +1509,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         PRINTF("frame: %.5f ms | msg: %.5f ms | ui: %.5f ms | render: %.5f ms | present: "
                "%.5f ms\nFPS: %.0f | cycles: %.4f M\n",
                frameMs, msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
+#else
+        (void)(msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
 #endif
     }
 
