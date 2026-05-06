@@ -1,7 +1,10 @@
 #pragma once
 
 // Has to be enough, including null terminator
-#define MAX_PATH_COUNT 2048
+// MAX_PATH is 260 defined by Windows
+// TODO: if we want to support UNICODE wide paths (32 767 characters), would need to allocate memory
+// https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
+#define MAX_PATH_COUNT 512
 
 enum JobStatus : u8 {
     QUEUED = 0,
@@ -30,11 +33,14 @@ struct UIJob {
     f32 targetSizeMb;
     volatile long status;      // JobStatus
     volatile long progressPct; // 0..100 (compression progress only)
-    f32 displayProgress;       // UI progress bar
     //Codec codec;
     //Preset preset;
 
     f32 resultFileSize;
+
+    f32 displayProgress; // UI progress bar
+
+    f32 openFlashTimer; // Open button flash
 };
 
 #define MAX_JOBS 10

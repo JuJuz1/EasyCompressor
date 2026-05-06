@@ -588,6 +588,7 @@ RunCompress(AppState* appState, UIJob* job) {
         }
 
         job->status = JobStatus::DONE_COMPRESS;
+        job->openFlashTimer = 5.0f;
     }
 }
 
@@ -1040,23 +1041,42 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             if (job->status == JobStatus::DONE_COMPRESS) {
                 ImGui::SameLine();
+
+                job->openFlashTimer -= delta;
+                job->openFlashTimer = ClampF32(job->openFlashTimer, 0.0f, 999.0f);
+                f32 fade = ClampF32(job->openFlashTimer, 0.0f, 1.0f);
+                f32 pulse = (sinf(job->openFlashTimer * 4.0f) + 1.0f) * 0.5f;
+                f32 t = pulse * fade;
+
+                ImVec4 colorA = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
+                ImVec4 colorB = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+                ImVec4 color = ImVec4(colorB.x + (colorA.x - colorB.x) * t,
+                                      colorB.y + (colorA.y - colorB.y) * t,
+                                      colorB.z + (colorA.z - colorB.z) * t, 1.0f);
+
+                ImGui::PushStyleColor(ImGuiCol_Button, color);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
                 if (ImGui::SmallButton("Open")) {
                     OpenInExplorer(hWnd, job->output);
                 }
 
+                ImGui::PopStyleColor(2);
                 ImGui::Text("Result size: %.1f MB", job->resultFileSize);
+            } else {
+                ImGui::TextUnformatted("");
             }
 
             if (job->progressPct != 0) {
-                //ImGui::Text("%d %%", job->progressPct);
                 f32 target = job->progressPct / 100.0f;
                 f32 diff = target - job->displayProgress;
                 //DEBUG_PRINTF("%.3f\n", diff);
                 f32 speed = diff > 0.1f ? 8.0f : 3.0f;
-                job->displayProgress += (target - job->displayProgress) * speed * (delta / 1000.0f);
+                job->displayProgress += (target - job->displayProgress) * speed * delta;
                 //DEBUG_PRINTF("%.3f\n", job->displayProgress);
                 job->displayProgress = ClampF32(job->displayProgress, 0.0f, 1.0f);
                 ImGui::ProgressBar(job->displayProgress);
+            } else {
+                ImGui::Dummy(ImVec2(-1.0, ImGui::GetFrameHeight()));
             }
 
             ImGui::TableSetColumnIndex(5);
@@ -1619,12 +1639,15 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     char testPath1[MAX_PATH_COUNT];
     char testPath2[MAX_PATH_COUNT];
+    char testPath3[MAX_PATH_COUNT];
 
     snprintf(testPath1, sizeof(testPath1), "%s..\\test_file1_large.mp4", appState.exeDir);
     snprintf(testPath2, sizeof(testPath2), "%s..\\test_file2.mp4", appState.exeDir);
+    snprintf(testPath3, sizeof(testPath3), "%s..\\testi_file_small.mp4", appState.exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);
+    AddJob(&appState, testPath3);
 #endif
 
     /// Performance statistics
@@ -1642,8 +1665,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     while (running) {
         auto frameStart = GetWallClock();
         // For the first frame delta is ~0.0f, which is fine
-        f32 delta = GetMsElapsed(lastCounter, frameStart);
-        //DEBUG_PRINTF("delta: %.2f\n", delta);
+        f32 deltaMs = GetMsElapsed(lastCounter, frameStart);
+        f32 delta = deltaMs / 1000.0f;
+        //DEBUG_PRINTF("delta: %.2f ms\n", deltaMs);
         lastCounter = frameStart;
 
         MSG msg;
