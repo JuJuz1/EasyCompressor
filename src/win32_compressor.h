@@ -23,14 +23,15 @@ enum class Codec : u8 {
 struct UIJob {
     char input[MAX_PATH_COUNT];
     char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
-    volatile long status;             // JobStatus, written across threads via Interlocked*
-    //volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
-    f32 targetSizeMb;
-    //Codec codec;
-    //Preset preset;
 
     f32 inputFileSize;
     f32 durationSeconds; // Probed from the video before compression (2 passes)
+
+    f32 targetSizeMb;
+    volatile long status;      // JobStatus
+    volatile long progressPct; // 0..100 (compression progress only)
+    //Codec codec;
+    //Preset preset;
 
     f32 resultFileSize;
 };

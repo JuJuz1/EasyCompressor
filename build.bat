@@ -15,6 +15,8 @@ set dxLibraries=d3d11.lib dxgi.lib d3dcompiler.lib
 
 set buildFailed=0
 
+del *.pdb
+
 cl %commonCompilerFlags% ../src/win32_compressor.cpp /I ../src /I ../vendor/imgui /link %commonLinkerFlags% %win32Libraries% %dxLibraries%
 
 if ERRORLEVEL 1 (
