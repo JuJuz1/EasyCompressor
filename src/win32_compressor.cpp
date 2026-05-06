@@ -98,9 +98,9 @@ GetWallClock() {
     return result;
 }
 
-static f64
+static f32
 GetMsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
-    f64 result = (static_cast<f64>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0;
+    f32 result = (static_cast<f32>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0f;
     return result;
 }
 
@@ -351,6 +351,9 @@ RunCompress(AppState* appState, UIJob* job) {
     ASSERT(job->status == JobStatus::DONE_PROBE || job->status == JobStatus::DONE_COMPRESS);
     job->status = JobStatus::RUNNING_COMPRESS;
 
+    job->progressPct = 0;
+    job->displayProgress = 0.0f;
+
     f32 totalBits = job->targetSizeMb * 1024.0f * 1024.0f * 8.0f;
     f32 totalKbps = (totalBits / job->durationSeconds) / 1000.0f;
 
@@ -557,6 +560,7 @@ RunCompress(AppState* appState, UIJob* job) {
             }
         }
 
+        _InterlockedExchange(&job->progressPct, 100);
         CloseHandle(readPipe);
 
         DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
@@ -772,7 +776,7 @@ CancelAfterCurrent(AppState* appState) {
 }
 
 static void
-DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
+DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta) {
     UIState* uiState = &appState->uiState;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -1034,10 +1038,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
             const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
             ImGui::TextUnformatted(statusText);
 
-            if (jobRunning && job->progressPct != 0) {
-                ImGui::Text("%d %%", job->progressPct);
-            }
-
             if (job->status == JobStatus::DONE_COMPRESS) {
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Open")) {
@@ -1047,12 +1047,17 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
                 ImGui::Text("Result size: %.1f MB", job->resultFileSize);
             }
 
-            // TODO: show progress on probe duration and compression
-            //if (job->durationSeconds != 0.0f) {
-            //    ImGui::Text("Duration: %.1f s", job->durationSeconds);
-            //} else {
-            //    ImGui::TextUnformatted("Calculating...");
-            //}
+            if (job->progressPct != 0) {
+                //ImGui::Text("%d %%", job->progressPct);
+                f32 target = job->progressPct / 100.0f;
+                f32 diff = target - job->displayProgress;
+                //DEBUG_PRINTF("%.3f\n", diff);
+                f32 speed = diff > 0.1f ? 8.0f : 3.0f;
+                job->displayProgress += (target - job->displayProgress) * speed * (delta / 1000.0f);
+                //DEBUG_PRINTF("%.3f\n", job->displayProgress);
+                job->displayProgress = ClampF32(job->displayProgress, 0.0f, 1.0f);
+                ImGui::ProgressBar(job->displayProgress);
+            }
 
             ImGui::TableSetColumnIndex(5);
             // TODO: If we use compressing here
@@ -1561,10 +1566,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_Init(hWnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
+    ImGui::StyleColorsDark();
     // auto would default to a copy instead of a reference... found this out the hard way
     // Didn't know this but I guess it makes sense, why doesn't the compiler warn about it...
     auto& style = ImGui::GetStyle();
     style.ScaleAllSizes(mainScale);
+    style.Colors[ImGuiCol_PlotHistogram] = style.Colors[ImGuiCol_SliderGrab];
+
     auto& io = ImGui::GetIO();
     io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
 
@@ -1633,6 +1641,10 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     while (running) {
         auto frameStart = GetWallClock();
+        // For the first frame delta is ~0.0f, which is fine
+        f32 delta = GetMsElapsed(lastCounter, frameStart);
+        //DEBUG_PRINTF("delta: %.2f\n", delta);
+        lastCounter = frameStart;
 
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1644,7 +1656,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         }
 
         auto msgEnd = GetWallClock();
-        f64 msgMs = GetMsElapsed(frameStart, msgEnd);
+        f32 msgMs = GetMsElapsed(frameStart, msgEnd);
 
         if (!running) {
             break;
@@ -1671,9 +1683,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        DrawUi(&appState, hInstance, hWnd, mainScale);
+        DrawUi(&appState, hInstance, hWnd, mainScale, delta);
         auto uiEnd = GetWallClock();
-        f64 uiMs = GetMsElapsed(uiStart, uiEnd);
+        f32 uiMs = GetMsElapsed(uiStart, uiEnd);
 
         auto renderStart = GetWallClock();
         ImGui::Render();
@@ -1685,25 +1697,24 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         //gContext->ClearRenderTargetView(gRtv, clearColorWithAlpha);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         auto renderEnd = GetWallClock();
-        f64 renderMs = GetMsElapsed(renderStart, renderEnd);
+        f32 renderMs = GetMsElapsed(renderStart, renderEnd);
 
         /// Frame work end
 
-        auto frameEnd = GetWallClock();
-        f64 frameMs = GetMsElapsed(frameStart, frameEnd);
+        auto frameWorkEnd = GetWallClock();
+        f32 frameWorkMs = GetMsElapsed(frameStart, frameWorkEnd);
         //lastCounter = frameEnd;
-        f64 fps = 1000.0 / frameMs;
+        f32 fps = 1000.0f / frameWorkMs;
 
         // RDTSC
         u64 endCycleCount = __rdtsc();
-        f64 cycleElapsedM = static_cast<f64>(endCycleCount - lastCycleCount) / (1000 * 1000);
+        f32 cycleElapsedM = static_cast<f32>(endCycleCount - lastCycleCount) / (1000.0f * 1000.0f);
         lastCycleCount = endCycleCount;
 
         auto presentStart = GetWallClock();
         gSwap->Present(1, 0); // (1, 0) -> vsync, otherwise we hog the cpu quite a lot
         auto presentEnd = GetWallClock();
-        f64 presentMs = GetMsElapsed(presentStart, presentEnd);
-
+        f32 presentMs = GetMsElapsed(presentStart, presentEnd);
 #if 0
         PRINTF("frame: %.5f ms | msg: %.5f ms | ui: %.5f ms | render: %.5f ms | present: "
                "%.5f ms\nFPS: %.0f | cycles: %.4f M\n",

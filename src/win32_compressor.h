@@ -30,6 +30,7 @@ struct UIJob {
     f32 targetSizeMb;
     volatile long status;      // JobStatus
     volatile long progressPct; // 0..100 (compression progress only)
+    f32 displayProgress;       // UI progress bar
     //Codec codec;
     //Preset preset;
 
