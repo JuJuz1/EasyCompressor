@@ -63,6 +63,7 @@ vendor/
 # ffmpeg logs
 *.log
 *.log.mbtree
+*.log.cutree
 
 # ImGui ini file
 imgui.ini

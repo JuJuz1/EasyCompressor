@@ -129,6 +129,18 @@ struct ScopedTimer {
     }
 };
 
+static const char*
+CodecText_(Codec s) {
+    switch (s) {
+    case Codec::H264:
+        return "libx264";
+    case Codec::H265:
+        return "libx265";
+    }
+
+    return "";
+}
+
 static void
 AddJob(AppState* appState, const char* path) {
     if (appState->jobCount >= MAX_JOBS) {
@@ -234,6 +246,7 @@ RunProbe(AppState* appState, UIJob* job) {
              "\"%sffprobe.exe\" -v error -show_entries format=duration "
              "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
              appState->ffmpegPath, job->input);
+    DEBUG_PRINTF("Running: %s\n", cmd);
 
     STARTUPINFOA si = {};
     si.cb = sizeof(si);
@@ -333,15 +346,24 @@ RunCompress(AppState* appState, UIJob* job) {
                      job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
     }
 
+    ASSERT(appState->defaultCodec != Codec::NONE);
+    if (appState->defaultCodec == Codec::NONE) {
+        DEBUG_PRINT("Codec was NONE, aborting compression\n");
+        return;
+    }
+
+    const char* codec = CodecText_(appState->defaultCodec);
+
     // Pass 1
     char cmd[(MAX_PATH_COUNT * 2) + 128];
     // TODO: different presets and h.264 and 265
     snprintf(cmd, sizeof(cmd),
              "%sffmpeg -y -hide_banner -loglevel error -stats "
-             "-i %s -c:v libx264 -preset medium -b:v %.0fk "
+             "-i %s -c:v %s -preset medium -b:v %.0fk "
              "-pass 1 -an -f null %s",
              //"-pass 1 -passlogfile %s -an -f null %s",
-             appState->ffmpegPath, job->input, videoKbps, NULL_DEV);
+             appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV);
+    DEBUG_PRINTF("Running: %s\n", cmd);
 
     STARTUPINFOA si1 = {};
     si1.cb = sizeof(si1);
@@ -407,13 +429,14 @@ RunCompress(AppState* appState, UIJob* job) {
     // Pass 2
     snprintf(cmd, sizeof(cmd),
              "%sffmpeg -y -hide_banner -loglevel error -stats "
-             "-i %s -c:v libx264 -preset medium -b:v %.0fk "
+             "-i %s -c:v %s -preset medium -b:v %.0fk "
              "-pass 2 "
              //"-pass 2 -passlogfile %s "
              "-c:a aac -b:a %.0fk -movflags +faststart %s",
-             appState->ffmpegPath, job->input, videoKbps //, passLog
+             appState->ffmpegPath, job->input, codec, videoKbps //, passLog
              ,
              audioKbps, job->output);
+    DEBUG_PRINTF("Running: %s\n", cmd);
 
     STARTUPINFOA si2 = {};
     si2.cb = sizeof(si2);
@@ -469,7 +492,7 @@ RunCompress(AppState* appState, UIJob* job) {
 
     if (exitCode2 != 0) {
         job->status = JobStatus::ERROR;
-        DEBUG_PRINT("Exit code != 0 pass 2");
+        DEBUG_PRINT("Exit code != 0 pass 2\n");
         return;
     }
 
@@ -619,7 +642,7 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
 // -----------------------------------------------------------------------------
 
 static const char*
-StatusText(JobStatus s) {
+JobStatusText(JobStatus s) {
     switch (s) {
     case JobStatus::QUEUED:
         return "Queued for next start...";
@@ -731,6 +754,40 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
     ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Apply to all files")) {
         SetTargetSizeForAll(appState, *defaultTargetSize);
+    }
+
+    ImGui::EndDisabled();
+
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, 10.0f);
+
+    ImGui::Text("Codec used:");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(compressing);
+
+    Codec currentCodec = appState->defaultCodec;
+    if (ImGui::RadioButton("H.264", appState->defaultCodec == Codec::H264)) {
+        appState->defaultCodec = Codec::H264;
+    }
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("Recommended default codec\n");
+        ImGui::EndTooltip();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::RadioButton("H.265", currentCodec == Codec::H265)) {
+        appState->defaultCodec = Codec::H265;
+    }
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(
+            "Can reduce video size 20-75% more compared to H.264, but will take a lot longer\n"
+            "Final size may end up being significantly below the target");
+        ImGui::EndTooltip();
     }
 
     ImGui::EndDisabled();
@@ -895,7 +952,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
 
             ImGui::TableSetColumnIndex(4);
 
-            const char* statusText = StatusText(static_cast<JobStatus>(job->status));
+            const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
             ImGui::TextUnformatted(statusText);
             if (job->status == JobStatus::DONE_COMPRESS) {
                 ImGui::SameLine();
@@ -1170,7 +1227,8 @@ CreateDefaultConfigFile(const char* path) {
         "# Append ! after a value to signal it as the default value\n"
         "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
         "range are clamped\n\n"
-        "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n";
+        "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n\n"
+        "[Codecs]\nh264 !\nh265\n";
 
     DWORD written = 0;
     // Don't write null terminator
@@ -1208,7 +1266,9 @@ LoadConfigFile(AppState* appState, const char* name) {
 
     i32 sizesParsed = 0;
     bool32 inSizes = false;
-    bool32 foundDefault = false;
+    bool32 inCodecs = false;
+    bool32 foundDefaultForSize = false;
+    bool32 foundDefaultForCodec = false;
     const char* p = buf;
 
     i32 sizesCount = ARRAY_COUNT(appState->targetSizes);
@@ -1238,6 +1298,13 @@ LoadConfigFile(AppState* appState, const char* name) {
                 inSizes = false;
             }
 
+            if (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
+                p[6] == 's' && p[7] == ']') {
+                inCodecs = true;
+            } else {
+                inCodecs = false;
+            }
+
             while (*p && *p != '\n') {
                 ++p;
             }
@@ -1262,7 +1329,7 @@ LoadConfigFile(AppState* appState, const char* name) {
                 appState->targetSizes[sizesParsed++] = value;
                 DEBUG_PRINTF("Parsed size: %.2f\n", value);
 
-                if (!foundDefault) {
+                if (!foundDefaultForSize) {
                     const char* start = p;
                     while (*p && *p != '\n') {
                         ++p;
@@ -1277,10 +1344,46 @@ LoadConfigFile(AppState* appState, const char* name) {
                     }
 
                     if (isDefault) {
-                        foundDefault = true;
+                        foundDefaultForSize = true;
                         DEBUG_PRINTF("Found default target size of %.2f!\n", value);
                         appState->defaultTargetSize = value;
                     }
+                }
+            }
+        } else if (inCodecs) {
+            if (!foundDefaultForCodec) {
+                const char* start = p;
+                while (*p && *p != '\n') {
+                    ++p;
+                }
+
+                bool32 isDefault = false;
+                for (const char* t = start; t < p; ++t) {
+                    if (*t == '!') {
+                        isDefault = true;
+                        break;
+                    }
+                }
+
+                // Skip leading whitespace
+                const char* end = p;
+                const char* t = start;
+                while (t < end && *t == ' ') {
+                    ++t;
+                }
+
+                Codec codec = Codec::NONE;
+                if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' && t[3] == '4') {
+                    codec = Codec::H264;
+                } else if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' &&
+                           t[3] == '5') {
+                    codec = Codec::H265;
+                }
+
+                if (codec != Codec::NONE && isDefault) {
+                    foundDefaultForCodec = true;
+                    DEBUG_PRINTF("Found default codec %s!\n", CodecText_(codec));
+                    appState->defaultCodec = codec;
                 }
             }
         }
@@ -1296,7 +1399,7 @@ LoadConfigFile(AppState* appState, const char* name) {
     // We consider having 0 target sizes a failure
     if (sizesParsed > 0 && sizesParsed < sizesCount) {
         DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
-        if (!foundDefault) {
+        if (!foundDefaultForSize) {
             // Set the first user-supplied size as the default
             f32 defaultSize = appState->targetSizes[0];
             DEBUG_PRINTF("Didn't find default, setting it to %.2f\n", defaultSize, 0);

@@ -13,12 +13,21 @@ enum JobStatus : u8 {
     ERROR
 };
 
+enum class Codec : u8 {
+    NONE = 0,
+
+    H264,
+    H265
+};
+
 struct UIJob {
     char input[MAX_PATH_COUNT];
     char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
     volatile long status;             // JobStatus, written across threads via Interlocked*
     //volatile long progressPct; // 0..100, optional (parse from ffmpeg -stats if you want)
     f32 targetSizeMb;
+    //Codec codec;
+    //Preset preset;
 
     f32 inputFileSize;
     f32 durationSeconds; // Probed from the video before compression (2 passes)
@@ -51,6 +60,7 @@ struct AppState {
 
     f32 defaultTargetSize;
     f32 targetSizes[SIZES_COUNT];
+    Codec defaultCodec;
 
     // All UI state with ImGui
     UIState uiState;
