@@ -10,7 +10,7 @@
 //#    define POPEN _popen
 //#    define PCLOSE _pclose
 #    define PATH_SEP '\\'
-#    define NULL_DEV "NU"
+#    define NULL_DEV "NUL"
 
 #    include <windows.h>
 
@@ -912,7 +912,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("File info", ImGuiTableColumnFlags_WidthFixed, 127 * scale);
         ImGui::TableSetupColumn("Target size", ImGuiTableColumnFlags_WidthFixed, sliderWidth);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 168 * scale);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 193 * scale);
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
@@ -1036,10 +1036,26 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             ImGui::TableSetColumnIndex(4);
 
-            const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
-            ImGui::TextUnformatted(statusText);
+            if (job->progressPct == 0) {
+                const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
+                ImGui::TextUnformatted(statusText);
+            } else {
+                f32 target = job->progressPct / 100.0f;
+                f32 diff = target - job->displayProgress;
+                //DEBUG_PRINTF("%.3f\n", diff);
+                f32 speed = diff > 0.1f ? 8.0f : 3.0f;
+                job->displayProgress += (target - job->displayProgress) * speed * delta;
+                //DEBUG_PRINTF("%.3f\n", job->displayProgress);
+                job->displayProgress = ClampF32(job->displayProgress, 0.0f, 1.0f);
+                ImGui::ProgressBar(job->displayProgress);
+                // A way to get the height for a dummy for example
+                //ImGui::ProgressBar(job->displayProgress, ImVec2(-1.0f,
+                //ImGui::GetTextLineHeight()));
+            }
 
             if (job->status == JobStatus::DONE_COMPRESS) {
+                ImGui::Text("Result size: %.1f MB", job->resultFileSize);
+
                 ImGui::SameLine();
 
                 job->openFlashTimer -= delta;
@@ -1056,27 +1072,17 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
                 ImGui::PushStyleColor(ImGuiCol_Button, color);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
-                if (ImGui::SmallButton("Open")) {
+                // Align end
+                f32 avail = ImGui::GetContentRegionAvail().x;
+                const char* label = "Open";
+                f32 buttonWidth =
+                    ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
+                if (ImGui::SmallButton(label)) {
                     OpenInExplorer(hWnd, job->output);
                 }
 
                 ImGui::PopStyleColor(2);
-                ImGui::Text("Result size: %.1f MB", job->resultFileSize);
-            } else {
-                ImGui::TextUnformatted("");
-            }
-
-            if (job->progressPct != 0) {
-                f32 target = job->progressPct / 100.0f;
-                f32 diff = target - job->displayProgress;
-                //DEBUG_PRINTF("%.3f\n", diff);
-                f32 speed = diff > 0.1f ? 8.0f : 3.0f;
-                job->displayProgress += (target - job->displayProgress) * speed * delta;
-                //DEBUG_PRINTF("%.3f\n", job->displayProgress);
-                job->displayProgress = ClampF32(job->displayProgress, 0.0f, 1.0f);
-                ImGui::ProgressBar(job->displayProgress);
-            } else {
-                ImGui::Dummy(ImVec2(-1.0, ImGui::GetFrameHeight()));
             }
 
             ImGui::TableSetColumnIndex(5);
@@ -1132,6 +1138,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::End();
 
     /// ImGui::End()
+
     // We have to do popup stuff here
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
@@ -1175,7 +1182,7 @@ static ID3D11RenderTargetView* gRtv;
 static bool32 gSwapChainOccluded;
 static i32 gResizeWidth, gResizeHeight;
 
-void
+static void
 CreateRenderTarget() {
     ID3D11Texture2D* pBackBuffer;
     gSwap->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
@@ -1183,7 +1190,7 @@ CreateRenderTarget() {
     pBackBuffer->Release();
 }
 
-void
+static void
 CleanupRenderTarget() {
     if (gRtv) {
         gRtv->Release();
@@ -1191,7 +1198,7 @@ CleanupRenderTarget() {
     }
 }
 
-bool
+static bool
 CreateDeviceD3D(HWND hWnd) {
     // Setup swap chain
     // This is a basic setup. Optimally could use e.g. DXGI_SWAP_EFFECT_FLIP_DISCARD and handle
@@ -1237,7 +1244,7 @@ CreateDeviceD3D(HWND hWnd) {
     return true;
 }
 
-void
+static void
 CleanupDeviceD3D() {
     CleanupRenderTarget();
     if (gSwap) {
