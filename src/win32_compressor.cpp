@@ -411,58 +411,57 @@ RunCompress(AppState* appState, UIJob* job) {
 
     char cmd[(MAX_PATH_COUNT * 2) + 128];
 
-    SECURITY_ATTRIBUTES sa = {};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
+    /// Pass 1
 
-    HANDLE readPipe1 = nullptr;
-    HANDLE writePipe1 = nullptr;
-
-    if (!CreatePipe(&readPipe1, &writePipe1, &sa, 0)) {
-        DEBUG_PRINT("Couldn't create pipe! ABORTING!\n");
-        job->status = JobStatus::ERROR;
-        return;
-    }
-
-    SetHandleInformation(readPipe1, HANDLE_FLAG_INHERIT, 0);
-
-    // Pass 1
-
-    snprintf(cmd, sizeof(cmd),
-             "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
-             "-i %s -c:v %s -preset medium -b:v %.0fk "
-             "-pass 1 -an -f null %s",
-             //"-pass 1 -passlogfile %s -an -f null %s",
-             appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV);
-    DEBUG_PRINTF("Running: %s\n", cmd);
-
-    STARTUPINFOA si1 = {};
-    si1.cb = sizeof(si1);
-    si1.dwFlags = STARTF_USESTDHANDLES;
-    si1.hStdOutput = writePipe1;
-    si1.hStdError = writePipe1;
-
-    PROCESS_INFORMATION pi1 = {};
-
-    //DEBUG_PRINTF("Creating process ffmpeg pass 1 for job %d\n", i);
     {
         ScopedTimer t = { "Pass 1", true };
-        BOOL created1 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                                       nullptr, nullptr, &si1, &pi1);
 
-        CloseHandle(writePipe1);
+        SECURITY_ATTRIBUTES sa = {};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
 
-        if (!created1) {
+        HANDLE readPipe = nullptr;
+        HANDLE writePipe = nullptr;
+
+        if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+            DEBUG_PRINT("Couldn't create pipe! ABORTING!\n");
+            job->status = JobStatus::ERROR;
+            return;
+        }
+
+        SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+        snprintf(cmd, sizeof(cmd),
+                 "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
+                 "-i %s -c:v %s -preset medium -b:v %.0fk "
+                 "-pass 1 -an -f null %s",
+                 //"-pass 1 -passlogfile %s -an -f null %s",
+                 appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV);
+        DEBUG_PRINTF("Running: %s\n", cmd);
+
+        STARTUPINFOA si = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = writePipe;
+        si.hStdError = writePipe;
+
+        PROCESS_INFORMATION pi = {};
+        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                      nullptr, nullptr, &si, &pi);
+
+        CloseHandle(writePipe);
+
+        if (!created) {
             DEBUG_PRINT("Couldn't create process ffmpeg! ABORTING!\n");
             job->status = JobStatus::ERROR;
-            CloseHandle(readPipe1);
+            CloseHandle(readPipe);
             return;
         }
 
         char buffer[256];
         DWORD bytesRead = 0;
 
-        while (ReadFile(readPipe1, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
             // Parse time and compare against the video duration
             // Update progressPct
@@ -473,76 +472,69 @@ RunCompress(AppState* appState, UIJob* job) {
                 _InterlockedExchange(&job->progressPct, progress);
             }
         }
-        //else {
-        //    DEBUG_PRINT("No space in buffer for ffmpeg output!\n");
-        //}
-        //}
 
-        CloseHandle(readPipe1);
+        CloseHandle(readPipe);
 
         DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
-        WaitForSingleObject(pi1.hProcess, INFINITE);
-        //DEBUG_PRINT("ffmpeg finished pass 1\n");
+        WaitForSingleObject(pi.hProcess, INFINITE);
+
+        DWORD exitCode = 0;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        if (exitCode != 0) {
+            job->status = JobStatus::ERROR;
+            DEBUG_PRINT("Exit code != 0 pass 1\n");
+            return;
+        }
+
+        //job->status = JobStatus::DONE_COMPRESS_PASS1; ?
     }
-
-    DWORD exitCode1 = 0;
-    GetExitCodeProcess(pi1.hProcess, &exitCode1);
-
-    CloseHandle(pi1.hProcess);
-    CloseHandle(pi1.hThread);
-
-    if (exitCode1 != 0) {
-        job->status = JobStatus::ERROR;
-        DEBUG_PRINT("Exit code != 0 pass 1\n");
-        return;
-    }
-
-    //job->status = JobStatus::DONE_COMPRESS;
-    //job->status = JobStatus::DONE_COMPRESS_PASS1; ?
 
     /// Pass 2
 
-    SECURITY_ATTRIBUTES sa2 = {};
-    sa2.nLength = sizeof(sa2);
-    sa2.bInheritHandle = TRUE;
-
-    HANDLE readPipe2 = nullptr;
-    HANDLE writePipe2 = nullptr;
-
-    if (!CreatePipe(&readPipe2, &writePipe2, &sa2, 0)) {
-        DEBUG_PRINT("Couldn't create pipe! ABORTING!\n");
-        job->status = JobStatus::ERROR;
-        return;
-    }
-
-    SetHandleInformation(readPipe2, HANDLE_FLAG_INHERIT, 0);
-
-    snprintf(cmd, sizeof(cmd),
-             "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
-             "-i %s -c:v %s -preset medium -b:v %.0fk "
-             "-pass 2 "
-             //"-pass 2 -passlogfile %s "
-             "-c:a aac -b:a %.0fk -movflags +faststart %s",
-             appState->ffmpegPath, job->input, codec, videoKbps //, passLog
-             ,
-             audioKbps, job->output);
-    DEBUG_PRINTF("Running: %s\n", cmd);
-
-    STARTUPINFOA si2 = {};
-    si2.cb = sizeof(si2);
-    si2.dwFlags = STARTF_USESTDHANDLES;
-    si2.hStdOutput = writePipe2;
-    si2.hStdError = writePipe2;
-
-    PROCESS_INFORMATION pi2 = {};
-
-    //DEBUG_PRINTF("Creating process ffmpeg pass 2 for job %d\n", i);
     {
         ScopedTimer t = { "Pass 2", true };
-        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                                       nullptr, nullptr, &si2, &pi2);
 
-        CloseHandle(writePipe2);
+        SECURITY_ATTRIBUTES sa = {};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+
+        HANDLE readPipe = nullptr;
+        HANDLE writePipe = nullptr;
+
+        if (!CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+            DEBUG_PRINT("Couldn't create pipe! ABORTING!\n");
+            job->status = JobStatus::ERROR;
+            return;
+        }
+
+        SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+        snprintf(cmd, sizeof(cmd),
+                 "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
+                 "-i %s -c:v %s -preset medium -b:v %.0fk "
+                 "-pass 2 "
+                 //"-pass 2 -passlogfile %s "
+                 "-c:a aac -b:a %.0fk -movflags +faststart %s",
+                 appState->ffmpegPath, job->input, codec, videoKbps //, passLog
+                 ,
+                 audioKbps, job->output);
+        DEBUG_PRINTF("Running: %s\n", cmd);
+
+        STARTUPINFOA si = {};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = writePipe;
+        si.hStdError = writePipe;
+
+        PROCESS_INFORMATION pi = {};
+        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                       nullptr, nullptr, &si, &pi);
+
+        CloseHandle(writePipe);
 
         if (!created2) {
             DEBUG_PRINT("Couldn't create process ffmpeg! ABORTING!\n");
@@ -554,7 +546,7 @@ RunCompress(AppState* appState, UIJob* job) {
         char buffer[256];
         DWORD bytesRead = 0;
 
-        while (ReadFile(readPipe2, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
             buffer[bytesRead] = '\0';
             f32 time = ParseTimeFromOutput(buffer);
@@ -565,34 +557,33 @@ RunCompress(AppState* appState, UIJob* job) {
             }
         }
 
-        CloseHandle(readPipe2);
+        CloseHandle(readPipe);
 
         DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
-        WaitForSingleObject(pi2.hProcess, INFINITE);
-        //DEBUG_PRINT("ffmpeg finished pass 2\n");
-    }
+        WaitForSingleObject(pi.hProcess, INFINITE);
 
-    DWORD exitCode2 = 0;
-    GetExitCodeProcess(pi2.hProcess, &exitCode2);
+        DWORD exitCode = 0;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
 
-    CloseHandle(pi2.hProcess);
-    CloseHandle(pi2.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
 
-    if (exitCode2 != 0) {
-        job->status = JobStatus::ERROR;
-        DEBUG_PRINT("Exit code != 0 pass 2\n");
-        return;
-    }
+        if (exitCode != 0) {
+            job->status = JobStatus::ERROR;
+            DEBUG_PRINT("Exit code != 0 pass 2\n");
+            return;
+        }
 
-    job->status = JobStatus::DONE_COMPRESS;
+        // TODO: We could probably get this from ffmpeg output also, but much easier this way
+        WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+        if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
+            u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
+            job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
+        } else {
+            DEBUG_PRINT("Failed to get file size!\n");
+        }
 
-    // TODO: We could probably get this from ffmpeg output also, but much easier this way
-    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-    if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
-        u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
-        job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
-    } else {
-        DEBUG_PRINT("Failed to get file size!\n");
+        job->status = JobStatus::DONE_COMPRESS;
     }
 }
 
@@ -1017,8 +1008,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
                                "%.1f MB", ImGuiSliderFlags_Logarithmic);
             if (tooLargeBefore && ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted(
-                    "Warning: target size greater than file size! File will not be compressed!");
+                ImGui::TextUnformatted("Warning: target size greater than file size! File will "
+                                       "not be compressed!");
                 ImGui::EndTooltip();
             }
 
@@ -1026,8 +1017,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
             ImGui::InputFloat("##mb_input", targetSize, 0.0f, 0.0f, "%.2f MB");
             if (tooLargeBefore && ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted(
-                    "Warning: target size greater than file size! File will not be compressed!");
+                ImGui::TextUnformatted("Warning: target size greater than file size! File will "
+                                       "not be compressed!");
                 ImGui::EndTooltip();
             }
 
@@ -1066,9 +1057,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale) {
             ImGui::TableSetColumnIndex(5);
             // TODO: If we use compressing here
             // we disable removing any file while compressing any file
-            // It would be a bit tricky to allow only removing newly added jobs if they are added
-            // during compressing. Current workflow is canceling the compressing and then removing
-            // them, which is fine
+            // It would be a bit tricky to allow only removing newly added jobs if they are
+            // added during compressing. Current workflow is canceling the compressing and then
+            // removing them, which is fine
             ImGui::BeginDisabled(compressing || jobRunning);
             if (ImGui::SmallButton("X")) {
                 removeIndex = i;
