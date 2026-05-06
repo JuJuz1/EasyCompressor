@@ -1395,6 +1395,16 @@ LoadConfigFile(AppState* appState, const char* name) {
 
     CloseHandle(file);
 
+    // Having no codecs is NOT considered a failure
+    // Having no default codec is also NOT considered a failure
+    // This is just for the simplicity and differs heavily from the logic of target sizes
+    // Simply: if we don't have the default set via "!", we assign a default
+    // TODO: maybe revise the logic here, see above
+    if (appState->defaultCodec == Codec::NONE) {
+        DEBUG_PRINT("No codec specified, assigning default!\n");
+        appState->defaultCodec = Codec::H264;
+    }
+
     // User added some sizes but not the full amount
     // We consider having 0 target sizes a failure
     if (sizesParsed > 0 && sizesParsed < sizesCount) {
