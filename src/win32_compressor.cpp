@@ -217,8 +217,9 @@ RemoveJob(AppState* appState, i32 index) {
 }
 
 static void
-MoveJob(AppState* appState, i32 from, i32 to) {
-    ASSERT(from != to || from > 0 || to > 0 || from < appState->jobCount ||
+MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
+    // Holy assert heaven
+    ASSERT(from != to && from >= 0 && to >= 0 && from < appState->jobCount &&
            to < appState->jobCount);
     if (from == to || from < 0 || to < 0 || from >= appState->jobCount ||
         to >= appState->jobCount) {
@@ -226,6 +227,20 @@ MoveJob(AppState* appState, i32 from, i32 to) {
     }
 
     UIJob tmp = appState->jobs[from];
+    ASSERT(tmp.status != JobStatus::RUNNING_PROBE && tmp.status != JobStatus::RUNNING_COMPRESS);
+    ASSERT(appState->jobs[to].status != JobStatus::RUNNING_PROBE &&
+           appState->jobs[to].status != JobStatus::RUNNING_COMPRESS);
+    if (tmp.status == JobStatus::RUNNING_PROBE || tmp.status == JobStatus::RUNNING_COMPRESS ||
+        appState->jobs[to].status == JobStatus::RUNNING_PROBE ||
+        appState->jobs[to].status == JobStatus::RUNNING_COMPRESS) {
+        return;
+    }
+
+    ASSERT(from > highestRunningIndex && to > highestRunningIndex);
+    if (from <= highestRunningIndex || to <= highestRunningIndex) {
+        return;
+    }
+
     if (from < to) {
         for (i32 i = from; i < to; ++i) {
             appState->jobs[i] = appState->jobs[i + 1];
@@ -1047,6 +1062,17 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
         i32 moveFromIndex = -1, moveToIndex = -1, removeIndex = -1;
 
+        // Only allow reordering of jobs that are above the current running index
+        // Otherwise it's too much work to get right
+        // This is because when we hit start, the WorkerThread stores the count of jobs at that time
+        i32 highestRunningIndex = -1;
+        for (i32 j = 0; j < appState->jobCount; ++j) {
+            if (appState->jobs[j].status == JobStatus::RUNNING_PROBE ||
+                appState->jobs[j].status == JobStatus::RUNNING_COMPRESS) {
+                highestRunningIndex = j;
+            }
+        }
+
         for (i32 i = 0; i < appState->jobCount; ++i) {
             UIJob* job = &appState->jobs[i];
 
@@ -1057,52 +1083,44 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             ImGui::PushID(i);
             ImGui::TableNextRow();
 
+            // Drag & drop reordering
+            auto handleJobDragDrop = [&](i32 i) {
+                if (!jobRunning && i > highestRunningIndex) {
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+                        ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(i32));
+                        ImGui::Text("Move %s", appState->jobs[i].input);
+                        ImGui::EndDragDropSource();
+                    }
+
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
+                            moveFromIndex = *(static_cast<i32*>(p->Data));
+                            moveToIndex = i;
+                        }
+
+                        ImGui::EndDragDropTarget();
+                    }
+                }
+            };
+
             ImGui::TableSetColumnIndex(0);
             //ImGui::Text("%d", i + 1);
+            ImGui::BeginDisabled(jobRunning || i < highestRunningIndex);
             {
                 char label[4];
                 snprintf(label, sizeof(label), "%d", i + 1);
-                ImGui::BeginDisabled(compressing);
-                ImGui::Selectable(label);
+                // Full cell width and height
+                ImGui::Selectable(
+                    label, false, 0,
+                    ImVec2(0, ImGui::GetFrameHeight() * 2 + ImGui::GetStyle().ItemSpacing.y));
             }
 
-            // Drag & drop reordering
-            if (!compressing &&
-                ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
-                ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(i32));
-                ImGui::Text("Move %s", appState->jobs[i].input);
-                ImGui::EndDragDropSource();
-            }
-
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
-                    moveFromIndex = *(static_cast<i32*>(p->Data));
-                    moveToIndex = i;
-                }
-
-                ImGui::EndDragDropTarget();
-            }
+            handleJobDragDrop(i);
 
             ImGui::TableSetColumnIndex(1);
             //ImGui::TextUnformatted(job->input);
             ImGui::Selectable(job->input);
-
-            // Drag & drop reordering
-            if (!compressing &&
-                ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
-                ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(i32));
-                ImGui::Text("Move %s", appState->jobs[i].input);
-                ImGui::EndDragDropSource();
-            }
-
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
-                    moveFromIndex = *(static_cast<i32*>(p->Data));
-                    moveToIndex = i;
-                }
-
-                ImGui::EndDragDropTarget();
-            }
+            handleJobDragDrop(i);
 
             ImGui::EndDisabled();
 
@@ -1115,9 +1133,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                //ImGui::Text("Input:\n%s", job->input);
-                //ImGui::Text("Output:\n%s", job->output);
-                //ImGui::Separator();
                 ImGui::TextUnformatted("Click to change output directory\n");
                 ImGui::TextUnformatted("Middle click to open input in explorer\n");
                 ImGui::TextUnformatted("Right click for more options\n");
@@ -1261,7 +1276,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::EndTable();
 
         if (moveFromIndex != -1) {
-            MoveJob(appState, moveFromIndex, moveToIndex);
+            MoveJob(appState, moveFromIndex, moveToIndex, highestRunningIndex);
         }
 
         if (removeIndex != -1) {
