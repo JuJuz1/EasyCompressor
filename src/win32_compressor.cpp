@@ -119,9 +119,9 @@ struct ScopedTimer {
 
     ~ScopedTimer() {
         auto end = GetWallClock();
-        f64 ms = GetMsElapsed(start, end);
+        f32 ms = GetMsElapsed(start, end);
         if (inSeconds) {
-            ms /= 1000.0;
+            ms /= 1000.0f;
             PRINTF("%s: %.2f s\n", name, ms);
         } else {
             PRINTF("%s: %.3f ms\n", name, ms);
@@ -676,7 +676,7 @@ RunCompress(AppState* appState, UIJob* job) {
         }
 
         job->status = JobStatus::DONE_COMPRESS;
-        job->openFlashTimer = 5.0f;
+        job->openFlashTimer = OPEN_FLASH_TIMER_START;
     }
 }
 
@@ -1209,6 +1209,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             if (job->progressPct == 0) {
                 ImGui::TextUnformatted(statusText);
             } else {
+                ASSERT(job->progressPct >= 0 && job->progressPct <= 100);
                 f32 target = job->progressPct / 100.0f;
                 f32 diff = target - job->displayProgress;
                 //DEBUG_PRINTF("%.3f\n", diff);
@@ -1231,8 +1232,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
                 ImGui::SameLine();
 
+                ASSERT(job->openFlashTimer >= 0.0f &&
+                       job->openFlashTimer <= OPEN_FLASH_TIMER_START);
                 job->openFlashTimer -= delta;
-                job->openFlashTimer = ClampF32(job->openFlashTimer, 0.0f, 999.0f);
+                job->openFlashTimer = ClampF32(job->openFlashTimer, 0.0f, OPEN_FLASH_TIMER_START);
                 f32 fade = ClampF32(job->openFlashTimer, 0.0f, 1.0f);
                 f32 pulse = (sinf(job->openFlashTimer * 4.0f) + 1.0f) * 0.5f;
                 f32 t = pulse * fade;
@@ -1300,6 +1303,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::EndDisabled();
 
     /// File icon for adding files
+    // TODO: check scaling
     // Not gonna even pretend to understand this, llms are good at something at least...
     ImGui::SameLine();
     f32 size = 36.0f * scale;
@@ -1904,8 +1908,10 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         auto frameStart = GetWallClock();
         // For the first frame delta is ~0.0f, which is fine
         f32 deltaMs = GetMsElapsed(lastCounter, frameStart);
-        f32 delta = deltaMs / 1000.0f;
-        //DEBUG_PRINTF("delta: %.2f ms\n", deltaMs);
+        //f32 delta = deltaMs / 1000.0f;
+        // We kinda have to clamp the delta as the file dialogs are blocking the main thread
+        // so we end up with values like 10 seconds which break the progress bar animations and such
+        f32 delta = ClampF32(deltaMs / 1000.0f, 0.0f, 0.05f);
         lastCounter = frameStart;
 
         MSG msg;

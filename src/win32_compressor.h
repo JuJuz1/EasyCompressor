@@ -45,6 +45,8 @@ struct UIJob {
     f32 openFlashTimer; // Open button flash
 };
 
+#define OPEN_FLASH_TIMER_START 5.0f
+
 #define MAX_JOBS 10
 
 // All in MB
