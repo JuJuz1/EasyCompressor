@@ -679,18 +679,20 @@ OpenInExplorer(HWND hWnd, const char* path) {
 
 static void
 PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
-    OPENFILENAMEA ofn = {};
-    char buffer[MAX_PATH_COUNT] = {};
+    char buffer[MAX_PATH_COUNT];
+    buffer[sizeof(buffer) - 1] = '\0';
 
+    OPENFILENAMEA ofn = {};
     ofn.lStructSize = sizeof(ofn);
 
     ofn.hwndOwner = hWnd;
     ofn.hInstance = hInstance;
 
+    // TODO: more extensions
     ofn.lpstrFilter = "MP4 Video (*.mp4)\0*.mp4\0All Files\0*.*\0";
     ofn.lpstrFile = buffer;
     ofn.lpstrTitle = "Select output file";
-    ofn.nMaxFile = MAX_PATH_COUNT;
+    ofn.nMaxFile = sizeof(buffer);
     // NOCHANGE_DIR to prevent generating imgui.ini
     ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
     ofn.lpstrDefExt = "mp4";
@@ -718,6 +720,53 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         } else {
             DEBUG_PRINT("Cancelled pick output path dialog!\n");
         }
+    }
+}
+
+static void
+PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
+    // TODO: Take care of stack size if MAX_PATH_COUNT is changed
+    char buffer[MAX_PATH_COUNT * MAX_JOBS];
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+
+    ofn.hwndOwner = hWnd;
+    ofn.hInstance = hInstance;
+
+    // TODO: more extensions
+    ofn.lpstrFilter = "MP4 Video (*.mp4)\0*.mp4\0All Files\0*.*\0";
+    ofn.lpstrFile = buffer;
+    ofn.lpstrTitle = "Select input files";
+    ofn.nMaxFile = sizeof(buffer);
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
+    ofn.lpstrDefExt = "mp4";
+
+    if (!GetOpenFileNameA(&ofn)) {
+        return;
+    }
+
+    // When multiple files are selected
+    // "C:\dir\0file1.mp4\0file2.mp4\0\0"
+    // When a single file selected
+    // "C:\dir\file1.mp4\0\0"
+    // We can see it ends with a double null termination
+    const char* dir = buffer;
+    const char* file = buffer + ofn.nFileOffset; // Get the first file
+
+    // Single file
+    if (*(file - 1) != '\0') {
+        AddJob(appState, buffer);
+        return;
+    }
+
+    // Multiple files
+    while (*file) {
+        char path[MAX_PATH_COUNT];
+        snprintf(path, sizeof(path), "%s\\%s", dir, file);
+        AddJob(appState, path);
+        file += StrLength(file) + 1;
     }
 }
 
@@ -788,8 +837,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Add files")) {
+            if (ImGui::MenuItem("Add files...")) {
                 DEBUG_PRINT("File -> Add files\n");
+                PickInputFiles(hInstance, hWnd, appState);
             }
 
             if (ImGui::MenuItem("Exit")) {
@@ -1126,6 +1176,64 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 
     ImGui::EndDisabled();
+
+    /// File icon for adding files
+    // Not gonna even pretend to understand this, llms are good at something at least...
+    ImGui::SameLine();
+    f32 size = 36.0f * scale;
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - size) * 0.5f);
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    f32 fileW = size * 0.7f;
+    f32 fold = size * 0.25f;
+
+    ImU32 col = IM_COL32(200, 200, 200, 255);
+
+    // File outline
+    dl->AddLine(ImVec2(pos.x, pos.y), ImVec2(pos.x + fileW - fold, pos.y), col, 2.0f);
+    dl->AddLine(ImVec2(pos.x, pos.y), ImVec2(pos.x, pos.y + size), col, 2.0f);
+    dl->AddLine(ImVec2(pos.x, pos.y + size), ImVec2(pos.x + fileW, pos.y + size), col, 2.0f);
+    dl->AddLine(ImVec2(pos.x + fileW, pos.y + fold), ImVec2(pos.x + fileW, pos.y + size), col,
+                2.0f);
+
+    // Fold diagonal
+    dl->AddLine(ImVec2(pos.x + fileW - fold, pos.y), ImVec2(pos.x + fileW, pos.y + fold), col,
+                2.0f);
+
+    // Corner triangle
+    dl->AddTriangleFilled(ImVec2(pos.x + fileW - fold - 1.0f, pos.y + 1.0f),
+                          ImVec2(pos.x + fileW - 1.0f, pos.y + fold + 1.0f),
+                          ImVec2(pos.x + fileW - fold - 1.0f, pos.y + fold + 1.0f),
+                          IM_COL32(150, 150, 150, 255));
+
+    // Plus sign
+    f32 cx = pos.x + size * 0.35f;
+    f32 cy = pos.y + size * 0.65f;
+    f32 arm = size * 0.15f;
+    f32 thickness = 2.0f;
+    dl->AddLine(ImVec2(cx - arm, cy), ImVec2(cx + arm, cy), IM_COL32(100, 220, 100, 255),
+                thickness);
+    dl->AddLine(ImVec2(cx, cy - arm), ImVec2(cx, cy + arm), IM_COL32(100, 220, 100, 255),
+                thickness);
+
+    // Invisible button for interaction
+    ImGui::InvisibleButton("##add_files", ImVec2(fileW, size));
+    if (ImGui::IsItemClicked()) {
+        PickInputFiles(hInstance, hWnd, appState);
+        ImGui::GetIO().ClearInputMouse(); // ImGui input really doesn't like blocking functions
+    }
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("Shortcut: Control + A");
+        ImGui::EndTooltip();
+    }
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (size - ImGui::GetTextLineHeight()) * 0.5f);
+    ImGui::TextDisabled("Add files...");
+
     ImGui::Separator();
 
     ImGui::BeginDisabled(compressing || noJobs);
@@ -1602,6 +1710,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     auto& io = ImGui::GetIO();
     io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
 
     AppState appState = {};
     GetExeDirectory(&appState);
@@ -1714,9 +1823,28 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        /// Input
+
+        // If we use ImGui input it has to be inside ImGui::NewFrame()
+        //HandleInput(); ??
+        // TODO: now it works with io.ClearInputKeys();
+        // Still consider using something like SDL if porting
+        bool32 ctrlPressed = ImGui::IsKeyDown(ImGuiKey_LeftCtrl);
+        if (ctrlPressed && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+            PickInputFiles(hInstance, hWnd, &appState);
+            // Otherwise we have to press control + A twice to enter here
+            // Likely due to the blocking nature of the function so ImGui gets confused
+            // Although it definitely should not get confused...
+            io.ClearInputKeys();
+        }
+
+        /// Draw
+
         DrawUi(&appState, hInstance, hWnd, mainScale, delta);
         auto uiEnd = GetWallClock();
         f32 uiMs = GetMsElapsed(uiStart, uiEnd);
+
+        /// Render
 
         auto renderStart = GetWallClock();
         ImGui::Render();
