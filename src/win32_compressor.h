@@ -79,4 +79,5 @@ struct AppState {
 
     char exeDir[MAX_PATH_COUNT];     // Absolute path to the exe directory
     char ffmpegPath[MAX_PATH_COUNT]; // Relative to working directory OR TODO: path?
+    char appData[MAX_PATH_COUNT];    // AppData/Roaming, where the config and imgui.ini are stored
 };

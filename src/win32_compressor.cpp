@@ -14,9 +14,10 @@
 
 #    include <windows.h>
 
-#    include <cderr.h>   // CommDlg errors
-#    include <commdlg.h> // OFN, GetSaveFileNameA
-#    include <process.h> // _beginthreadex
+#    include <cderr.h>       // CommDlg errors
+#    include <commdlg.h>     // OFN, GetSaveFileNameA
+#    include <process.h>     // _beginthreadex
+#    include <shlobj_core.h> // SHGetFolderPathA
 
 // Windows...
 #    ifdef ERROR
@@ -666,7 +667,6 @@ RunCompress(AppState* appState, UIJob* job) {
             return;
         }
 
-        // TODO: We could probably get this from ffmpeg output also, but much easier this way
         WIN32_FILE_ATTRIBUTE_DATA fileInfo;
         if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
             u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
@@ -758,15 +758,20 @@ GetExeDirectory(AppState* appState) {
     }
 
     if (lastSlashIndex >= 0) {
-        appState->exeDir[lastSlashIndex + 1] = '\0';
+        appState->exeDir[lastSlashIndex] = '\0';
     }
 }
 
 static void
-OpenInExplorer(HWND hWnd, const char* path) {
+SelectInExplorer(HWND hWnd, const char* path) {
     char cmd[MAX_PATH_COUNT];
     snprintf(cmd, sizeof(cmd), "/select,\"%s\"", path);
     ShellExecuteA(hWnd, "open", "explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
+}
+
+static void
+OpenInExplorer(HWND hWnd, const char* path) {
+    ShellExecuteA(hWnd, "open", "explorer.exe", path, nullptr, SW_SHOWNORMAL);
 }
 
 static void
@@ -912,7 +917,6 @@ ClampF32(f32 value, f32 min, f32 max) {
     return value;
 }
 
-// TODO: allow canceling the current compression also, ending the compression?
 static void
 CancelBatch(AppState* appState) {
     _InterlockedExchange(&appState->cancelRequested, 1);
@@ -947,6 +951,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             if (ImGui::MenuItem("About")) {
                 uiState->helpAboutClicked = true;
                 DEBUG_PRINT("About clicked\n");
+            }
+
+            if (ImGui::MenuItem("Open config folder...")) {
+                OpenInExplorer(hWnd, appState->appData);
             }
 
             ImGui::EndMenu();
@@ -1144,10 +1152,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                 // This is done to reset broken hover state after the dialog closes
                 ImGui::GetIO().ClearInputMouse();
             } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-                OpenInExplorer(hWnd, job->input);
+                SelectInExplorer(hWnd, job->input);
             } else if (ImGui::BeginPopupContextItem("job_context_menu")) {
                 if (ImGui::MenuItem("Open input in explorer...")) {
-                    OpenInExplorer(hWnd, job->input);
+                    SelectInExplorer(hWnd, job->input);
                 }
 
                 // TODO: more?
@@ -1255,7 +1263,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                     ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
                 if (ImGui::SmallButton(label)) {
-                    OpenInExplorer(hWnd, job->output);
+                    SelectInExplorer(hWnd, job->output);
                 }
 
                 ImGui::PopStyleColor(2);
@@ -1303,8 +1311,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::EndDisabled();
 
     /// File icon for adding files
-    // TODO: check scaling
-    // Not gonna even pretend to understand this, llms are good at something at least...
+
     ImGui::SameLine();
     f32 size = 36.0f * scale;
     ImGui::SetCursorPosX((ImGui::GetWindowWidth() - size) * 0.5f);
@@ -1595,8 +1602,8 @@ CreateDefaultConfigFile(const char* path) {
 }
 
 static bool32
-LoadConfigFile(AppState* appState, const char* name) {
-    HANDLE file = CreateFileA(name, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+LoadConfigFile(AppState* appState, const char* path) {
+    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, 0);
     if (!file) {
         DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
@@ -1836,23 +1843,48 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     auto& io = ImGui::GetIO();
     io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     AppState appState = {};
+    gAppState = &appState;
+
     GetExeDirectory(&appState);
     DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
     //GetFFMpegPath(&pathInfo);
 
     /// Config file
 
-    const char* configFilename = "easycompressor.cfg";
-    bool32 loaded = LoadConfigFile(&appState, configFilename);
+    char appData[MAX_PATH_COUNT];
+    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
+        DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
+        // Use exe dir as working dir...
+        snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
+    } else {
+        DEBUG_PRINTF("Found appdata %s\n", appData);
+        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, name);
+        // It's okay to fail silently
+        BOOL created = CreateDirectoryA(appState.appData, nullptr);
+        if (!created) {
+            DWORD err = GetLastError();
+            if (err != ERROR_ALREADY_EXISTS) {
+                // This shouldn't ever happen though
+                DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
+                             "there. Using exe dir...\n");
+                snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
+                ASSERT(false);
+            }
+        }
+    }
+
+    char configPath[MAX_PATH_COUNT];
+    snprintf(configPath, sizeof(configPath), "%s\\easycompressor.cfg", appState.appData);
+
+    bool32 loaded = LoadConfigFile(&appState, configPath);
     if (!loaded) {
-        // TODO: abs path?
-        bool32 created = CreateDefaultConfigFile(configFilename);
+        bool32 created = CreateDefaultConfigFile(configPath);
         if (created) {
             DEBUG_PRINT("Loading just created config file...\n");
-            LoadConfigFile(&appState, configFilename);
+            LoadConfigFile(&appState, configPath);
         } else {
             DEBUG_PRINT("Fallback to using default target sizes...\n");
             f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
@@ -1861,7 +1893,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         }
     }
 
-    gAppState = &appState;
+    // imgui.ini also to same path
+    snprintf(configPath, sizeof(configPath), "%s\\imgui.ini", appState.appData);
+    io.IniFilename = configPath;
 
     // TODO: support package managers so read from PATH
     snprintf(appState.ffmpegPath, sizeof(appState.ffmpegPath), "vendor\\ffmpeg\\");
@@ -1883,9 +1917,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     char testPath2[MAX_PATH_COUNT];
     char testPath3[MAX_PATH_COUNT];
 
-    snprintf(testPath1, sizeof(testPath1), "%s..\\test_file1_large.mp4", appState.exeDir);
-    snprintf(testPath2, sizeof(testPath2), "%s..\\test_file2.mp4", appState.exeDir);
-    snprintf(testPath3, sizeof(testPath3), "%s..\\testi_file_small.mp4", appState.exeDir);
+    snprintf(testPath1, sizeof(testPath1), "%s\\..\\test_file1_large.mp4", appState.exeDir);
+    snprintf(testPath2, sizeof(testPath2), "%s\\..\\test_file2.mp4", appState.exeDir);
+    snprintf(testPath3, sizeof(testPath3), "%s\\..\\testi_file_small.mp4", appState.exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);
@@ -1955,7 +1989,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         // If we use ImGui input it has to be inside ImGui::NewFrame()
         //HandleInput(); ??
-        // TODO: now it works with io.ClearInputKeys();
+        // Now it works with io.ClearInputKeys();
         // Still consider using something like SDL if porting
         bool32 ctrlPressed = ImGui::IsKeyDown(ImGuiKey_LeftCtrl);
         if (ctrlPressed && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
