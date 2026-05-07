@@ -13,7 +13,9 @@ enum JobStatus : u8 {
     DONE_PROBE,
     RUNNING_COMPRESS,
     DONE_COMPRESS,
-    ERROR
+    CANCELLED,
+
+    ERROR,
 };
 
 enum class Codec : u8 {

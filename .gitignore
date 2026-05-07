@@ -64,6 +64,7 @@ vendor/
 *.log
 *.log.mbtree
 *.log.cutree
+*.log*.temp
 
 # ImGui ini file
 imgui.ini

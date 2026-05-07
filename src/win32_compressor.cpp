@@ -155,8 +155,8 @@ AddJob(AppState* appState, const char* path) {
     //}
 
     UIJob* j = &appState->jobs[appState->jobCount++];
-    //*j = UIJob{}; Compiler error when using /O2
-    ZeroMemory(j, sizeof(j));
+    *j = {}; // *j = UIJob{}; Compiler error when using /O2. Now seems fine?
+    //ZeroMemory(j, sizeof(j)); nasty stuff, not dereferencing
 
     j->status = JobStatus::QUEUED;
     j->targetSizeMb = appState->defaultTargetSize;
@@ -308,6 +308,7 @@ RunProbe(AppState* appState, UIJob* job) {
 
         job->status = JobStatus::DONE_PROBE;
     } else {
+        DEBUG_PRINT(buffer);
         job->status = JobStatus::ERROR;
     }
 }
@@ -348,7 +349,8 @@ ParseTimeFromOutput(const char* buffer) {
 
 static void
 RunCompress(AppState* appState, UIJob* job) {
-    ASSERT(job->status == JobStatus::DONE_PROBE || job->status == JobStatus::DONE_COMPRESS);
+    ASSERT(job->status == JobStatus::DONE_PROBE || job->status == JobStatus::DONE_COMPRESS ||
+           job->status == JobStatus::CANCELLED);
     job->status = JobStatus::RUNNING_COMPRESS;
 
     job->progressPct = 0;
@@ -464,8 +466,26 @@ RunCompress(AppState* appState, UIJob* job) {
         char buffer[256];
         DWORD bytesRead = 0;
 
+        bool32 cancelled = false;
         while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
+            if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
+                DEBUG_PRINT("Cancelled ffmpeg pass 1!\n");
+                TerminateProcess(pi.hProcess, 1);
+
+                DEBUG_PRINT("Waiting for termination...\n");
+                // Wait before requesting a delete, to safely delete
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                if (!DeleteFileA(job->output)) {
+                    DEBUG_PRINTF("Couldn't delete file %s after terminating process!\n",
+                                 job->output);
+                }
+
+                job->status = JobStatus::CANCELLED;
+                cancelled = true;
+                break;
+            }
+
             // Parse time and compare against the video duration
             // Update progressPct
             buffer[bytesRead] = '\0';
@@ -478,8 +498,10 @@ RunCompress(AppState* appState, UIJob* job) {
 
         CloseHandle(readPipe);
 
-        DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
-        WaitForSingleObject(pi.hProcess, INFINITE);
+        if (!cancelled) {
+            DEBUG_PRINT("Waiting for ffmpeg pass 1...\n");
+            WaitForSingleObject(pi.hProcess, INFINITE);
+        }
 
         DWORD exitCode = 0;
         GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -488,8 +510,12 @@ RunCompress(AppState* appState, UIJob* job) {
         CloseHandle(pi.hThread);
 
         if (exitCode != 0) {
-            job->status = JobStatus::ERROR;
-            DEBUG_PRINT("Exit code != 0 pass 1\n");
+            if (!cancelled) {
+                DEBUG_PRINT(buffer);
+                job->status = JobStatus::ERROR;
+                DEBUG_PRINT("Exit code != 0 pass 1\n");
+            }
+
             return;
         }
 
@@ -534,12 +560,12 @@ RunCompress(AppState* appState, UIJob* job) {
         si.hStdError = writePipe;
 
         PROCESS_INFORMATION pi = {};
-        BOOL created2 = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                                       nullptr, nullptr, &si, &pi);
+        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                      nullptr, nullptr, &si, &pi);
 
         CloseHandle(writePipe);
 
-        if (!created2) {
+        if (!created) {
             DEBUG_PRINT("Couldn't create process ffmpeg! ABORTING!\n");
             job->status = JobStatus::ERROR;
             //CloseHandle(readPipe);
@@ -549,8 +575,25 @@ RunCompress(AppState* appState, UIJob* job) {
         char buffer[256];
         DWORD bytesRead = 0;
 
+        bool32 cancelled = false;
         while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
+            if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
+                DEBUG_PRINT("Cancelled ffmpeg pass 2!\n");
+                TerminateProcess(pi.hProcess, 1);
+
+                DEBUG_PRINT("Waiting for termination...\n");
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                if (!DeleteFileA(job->output)) {
+                    DEBUG_PRINTF("Couldn't delete file %s after terminating process!\n",
+                                 job->output);
+                }
+
+                job->status = JobStatus::CANCELLED;
+                cancelled = true;
+                break;
+            }
+
             buffer[bytesRead] = '\0';
             f32 time = ParseTimeFromOutput(buffer);
             if (time != 0.0f) {
@@ -560,11 +603,13 @@ RunCompress(AppState* appState, UIJob* job) {
             }
         }
 
-        _InterlockedExchange(&job->progressPct, 100);
         CloseHandle(readPipe);
 
-        DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
-        WaitForSingleObject(pi.hProcess, INFINITE);
+        if (!cancelled) {
+            _InterlockedExchange(&job->progressPct, 100);
+            DEBUG_PRINT("Waiting for ffmpeg pass 2...\n");
+            WaitForSingleObject(pi.hProcess, INFINITE);
+        }
 
         DWORD exitCode = 0;
         GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -573,8 +618,12 @@ RunCompress(AppState* appState, UIJob* job) {
         CloseHandle(pi.hThread);
 
         if (exitCode != 0) {
-            job->status = JobStatus::ERROR;
-            DEBUG_PRINT("Exit code != 0 pass 2\n");
+            if (!cancelled) {
+                DEBUG_PRINT(buffer);
+                job->status = JobStatus::ERROR;
+                DEBUG_PRINT("Exit code != 0 pass 2\n");
+            }
+
             return;
         }
 
@@ -611,11 +660,6 @@ WorkerThread(void* param) {
         if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
-                if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
-                    DEBUG_PRINT("Cancelled compressing...");
-                    break;
-                }
-
                 UIJob* job = &appState->jobs[i];
                 // Allow compressing again
                 // TODO: should the default be this so every file gets compressed again?
@@ -623,11 +667,20 @@ WorkerThread(void* param) {
                 // compressed again. This covers both the cases of adding files when compressing
                 // and not compressing
                 if (job->status == JobStatus::DONE_PROBE ||
-                    job->status == JobStatus::DONE_COMPRESS) {
-                    ScopedTimer t = { true };
-                    PRINTF("Start RunCompress for job %d\n", i);
-                    RunCompress(appState, job);
-                    PRINTF("RunCompress for job %d", i);
+                    job->status == JobStatus::DONE_COMPRESS ||
+                    job->status == JobStatus::CANCELLED) {
+                    {
+                        ScopedTimer t = { true };
+                        PRINTF("Start RunCompress for job %d\n", i);
+                        RunCompress(appState, job);
+                        PRINTF("RunCompress for job %d", i);
+                    }
+
+                    // Sets to 0 automatically if was 1
+                    if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
+                        DEBUG_PRINT("Cancelled compressing...\n");
+                        break;
+                    }
                 }
             }
 
@@ -787,6 +840,8 @@ JobStatusText(JobStatus s) {
         return "Compressing...";
     case JobStatus::DONE_COMPRESS:
         return "Compressed!";
+    case JobStatus::CANCELLED:
+        return "Cancelled!";
     case JobStatus::ERROR:
         return "Error";
     }
@@ -820,9 +875,9 @@ ClampF32(f32 value, f32 min, f32 max) {
 
 // TODO: allow canceling the current compression also, ending the compression?
 static void
-CancelAfterCurrent(AppState* appState) {
+CancelBatch(AppState* appState) {
     _InterlockedExchange(&appState->cancelRequested, 1);
-    DEBUG_PRINT("Cancel after current pressed!\n");
+    DEBUG_PRINT("Cancel pressed!\n");
 }
 
 static void
@@ -1086,8 +1141,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             ImGui::TableSetColumnIndex(4);
 
+            const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
             if (job->progressPct == 0) {
-                const char* statusText = JobStatusText(static_cast<JobStatus>(job->status));
                 ImGui::TextUnformatted(statusText);
             } else {
                 f32 target = job->progressPct / 100.0f;
@@ -1101,6 +1156,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                 // A way to get the height for a dummy for example
                 //ImGui::ProgressBar(job->displayProgress, ImVec2(-1.0f,
                 //ImGui::GetTextLineHeight()));
+            }
+
+            if (job->progressPct != 0 && job->status == JobStatus::CANCELLED) {
+                ImGui::TextUnformatted(statusText);
             }
 
             if (job->status == JobStatus::DONE_COMPRESS) {
@@ -1169,10 +1228,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(!compressing || (compressing && appState->jobCount == 1) || cancelled ||
-                         noJobs);
-    if (ImGui::Button("Cancel after current")) {
-        CancelAfterCurrent(appState);
+    ImGui::BeginDisabled(!compressing || cancelled || noJobs);
+    if (ImGui::Button("Cancel")) {
+        CancelBatch(appState);
     }
 
     ImGui::EndDisabled();
