@@ -216,6 +216,30 @@ RemoveJob(AppState* appState, i32 index) {
     appState->jobCount--;
 }
 
+static void
+MoveJob(AppState* appState, i32 from, i32 to) {
+    ASSERT(from != to || from > 0 || to > 0 || from < appState->jobCount ||
+           to < appState->jobCount);
+    if (from == to || from < 0 || to < 0 || from >= appState->jobCount ||
+        to >= appState->jobCount) {
+        return;
+    }
+
+    UIJob tmp = appState->jobs[from];
+    if (from < to) {
+        for (i32 i = from; i < to; ++i) {
+            appState->jobs[i] = appState->jobs[i + 1];
+        }
+    } else {
+        for (i32 i = from; i > to; --i) {
+            appState->jobs[i] = appState->jobs[i - 1];
+        }
+    }
+
+    appState->jobs[to] = tmp;
+    DEBUG_PRINTF("Moved job %d to %d\n", from, to);
+}
+
 // -----------------------------------------------------------------------------
 // Worker thread, runs jobs sequentially. For parallel encoding, spawn N of these
 // and have them pop jobs off a shared index with InterlockedIncrement
@@ -1021,8 +1045,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::TableSetupColumn("Remove?", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
 
-        //i32 moveFrom = -1, moveTo = -1, removeIdx = -1;
-        i32 removeIndex = -1;
+        i32 moveFromIndex = -1, moveToIndex = -1, removeIndex = -1;
 
         for (i32 i = 0; i < appState->jobCount; ++i) {
             UIJob* job = &appState->jobs[i];
@@ -1035,10 +1058,53 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%d", i + 1);
+            //ImGui::Text("%d", i + 1);
+            {
+                char label[4];
+                snprintf(label, sizeof(label), "%d", i + 1);
+                ImGui::BeginDisabled(compressing);
+                ImGui::Selectable(label);
+            }
+
+            // Drag & drop reordering
+            if (!compressing &&
+                ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+                ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(i32));
+                ImGui::Text("Move %s", appState->jobs[i].input);
+                ImGui::EndDragDropSource();
+            }
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
+                    moveFromIndex = *(static_cast<i32*>(p->Data));
+                    moveToIndex = i;
+                }
+
+                ImGui::EndDragDropTarget();
+            }
 
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(job->input);
+            //ImGui::TextUnformatted(job->input);
+            ImGui::Selectable(job->input);
+
+            // Drag & drop reordering
+            if (!compressing &&
+                ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
+                ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(i32));
+                ImGui::Text("Move %s", appState->jobs[i].input);
+                ImGui::EndDragDropSource();
+            }
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
+                    moveFromIndex = *(static_cast<i32*>(p->Data));
+                    moveToIndex = i;
+                }
+
+                ImGui::EndDragDropTarget();
+            }
+
+            ImGui::EndDisabled();
 
             ImGui::BeginDisabled(jobRunning);
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
@@ -1076,23 +1142,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
                 ImGui::EndPopup();
             }
-
-            // Drag-drop reorder
-            //if (!busy && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover))
-            //{
-            //    ImGui::SetDragDropPayload("JOB_ROW", &i, sizeof(int));
-            //    ImGui::Text("Move %s", appState->jobs[i].input);
-            //    ImGui::EndDragDropSource();
-            //}
-
-            //if (ImGui::BeginDragDropTarget()) {
-            //    if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("JOB_ROW")) {
-            //        moveFrom = *(const i32*)p->Data;
-            //        moveTo = i;
-            //    }
-
-            //    ImGui::EndDragDropTarget();
-            //}
 
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("Size: %.1f MB", job->inputFileSize);
@@ -1211,9 +1260,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
         ImGui::EndTable();
 
-        //if (moveFrom != -1) {
-        //    MoveJob(moveFrom, moveTo);
-        //}
+        if (moveFromIndex != -1) {
+            MoveJob(appState, moveFromIndex, moveToIndex);
+        }
 
         if (removeIndex != -1) {
             RemoveJob(appState, removeIndex);
