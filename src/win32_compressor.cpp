@@ -679,8 +679,7 @@ OpenInExplorer(HWND hWnd, const char* path) {
 
 static void
 PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
-    char buffer[MAX_PATH_COUNT];
-    buffer[sizeof(buffer) - 1] = '\0';
+    char buffer[MAX_PATH_COUNT] = {};
 
     OPENFILENAMEA ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -726,8 +725,7 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
 static void
 PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // TODO: Take care of stack size if MAX_PATH_COUNT is changed
-    char buffer[MAX_PATH_COUNT * MAX_JOBS];
-    buffer[sizeof(buffer) - 1] = '\0';
+    char buffer[MAX_PATH_COUNT * MAX_JOBS] = {};
 
     OPENFILENAMEA ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -744,6 +742,8 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     ofn.lpstrDefExt = "mp4";
 
     if (!GetOpenFileNameA(&ofn)) {
+        DWORD err = CommDlgExtendedError();
+        DEBUG_PRINTF("CommDlgExtendedError in PickInputFiles: %u\n", err);
         return;
     }
 
