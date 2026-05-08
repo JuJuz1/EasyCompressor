@@ -15,6 +15,7 @@ SRC_FILES=(
     "src/win32_compressor.cpp"
 )
 
+# removed: /I vendor/imgui because couldn't get to suppress warnings from imgui files
 COMPILER_COMMAND="clang-cl -DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_INTERNAL=1 -DCOMPRESSOR_DEBUG=1 /I src /W4 /std:c++20"
 
 # Start building the JSON, overwriting if already existed

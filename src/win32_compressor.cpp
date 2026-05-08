@@ -101,7 +101,8 @@ GetWallClock() {
 
 static f32
 GetMsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
-    f32 result = (static_cast<f32>(end.QuadPart - start.QuadPart) / gPerfFreq) * 1000.0f;
+    f32 result =
+        (static_cast<f32>(end.QuadPart - start.QuadPart) / static_cast<f32>(gPerfFreq)) * 1000.0f;
     return result;
 }
 
@@ -164,6 +165,8 @@ AddJob(AppState* appState, const char* path) {
 
     snprintf(j->input, sizeof(j->input), "%s", path);
 
+    // TODO: maybe just use a dedicated output folder and use the input name as output
+    // that way we wouldn't have to do this string processing nonsense
     const char* lastDot = nullptr;
     for (const char* scan = j->input; *scan; ++scan) {
         if (*scan == '.') {
@@ -256,6 +259,21 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
     DEBUG_PRINTF("Moved job %d to %d\n", from, to);
 }
 
+// Wrapper for strtod for easier usage
+// We use the double version for greater precision and rounding
+// Default to a value of 0.0f on every error case
+static f32
+StrToF32(const char* start) {
+    char* end = nullptr;
+    f32 result = static_cast<f32>(strtod(start, &end));
+    // (Error or underflow) or (no numbers parsed) or (overflow)
+    if ((result == 0.0f) || (start == end) || (result == -HUGE_VALF || result == HUGE_VAL)) {
+        result = 0.0f;
+    }
+
+    return result;
+}
+
 // -----------------------------------------------------------------------------
 // Worker thread, runs jobs sequentially. For parallel encoding, spawn N of these
 // and have them pop jobs off a shared index with InterlockedIncrement
@@ -342,7 +360,14 @@ RunProbe(AppState* appState, UIJob* job) {
 
     if (exitCode == 0) {
         // Parse duration
-        job->durationSeconds = static_cast<f32>(atof(output));
+        f32 result = StrToF32(output);
+        if (result == 0.0f) {
+            DEBUG_PRINTF("StrToF32 produced 0.0f for RunProbe %s", job->input);
+            job->status = JobStatus::ERROR;
+            return;
+        }
+
+        job->durationSeconds = result;
 
         //job->progressPct = 100;
 
@@ -379,9 +404,9 @@ ParseTimeFromOutput(const char* buffer) {
         return seconds;
     }
 
-    f32 timeUs = static_cast<f32>(atof(last));
-    if (timeUs != 0.0f) {
-        seconds = timeUs / 1'000'000.0f;
+    f32 result = StrToF32(last);
+    if (result != 0.0f) {
+        seconds = result / 1'000'000.0f;
     }
 
     return seconds;
@@ -809,7 +834,6 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         if (err == FNERR_BUFFERTOOSMALL) {
             // TODO: show errors for user here also
             DEBUG_PRINT("Buffer too small for output path!\n");
-            return;
         } else if (err == FNERR_INVALIDFILENAME) {
             DEBUG_PRINT("Invalid file name for output path!\n");
             // TODO: handle?
@@ -910,7 +934,9 @@ ClampF32(f32 value, f32 min, f32 max) {
     ASSERT(min <= max);
     if (value < min) {
         return min;
-    } else if (value > max) {
+    }
+
+    if (value > max) {
         return max;
     }
 
@@ -1566,9 +1592,9 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         DragFinish(drop);
         return 0;
-    }
+    } break;
 
-    case WM_SIZE:
+    case WM_SIZE: {
         if (gDevice && wParam != SIZE_MINIMIZED) {
             CleanupRenderTarget();
             gSwap->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
@@ -1576,10 +1602,15 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         return 0;
+    } break;
 
-    case WM_DESTROY:
+    case WM_DESTROY: {
         PostQuitMessage(0);
         return 0;
+    } break;
+
+    default: {
+    } break;
     }
 
     return DefWindowProcA(hWnd, msg, wParam, lParam);
@@ -1680,7 +1711,7 @@ LoadConfigFile(AppState* appState, const char* path) {
         }
 
         if (inSizes) {
-            f32 value = static_cast<f32>(atof(p));
+            f32 value = StrToF32(p);
             if (value != 0.0f || (*p >= '0' && *p <= '9')) {
                 f32 oldValue = value;
                 value = ClampF32(value, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
