@@ -22,14 +22,18 @@ typedef float f32;
 typedef double f64;
 
 // clang-format off
+
+// clang-tidy NOLINTBEGIN
 #if COMPRESSOR_DEBUG
 #    define ASSERT(expr) if (!(expr)) { *(static_cast<int*>(nullptr)) = 0; }
 #else
 #    define ASSERT(expr)
 #endif
-// clang-format on
+// clang-tidy NOLINTEND
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+
+// clang-format on
 
 static i32
 StrLength(const char* str) {

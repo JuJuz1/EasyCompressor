@@ -747,7 +747,7 @@ StartBatch(AppState* appState) {
 
 static void
 GetExeDirectory(AppState* appState) {
-    GetModuleFileNameA(0, appState->exeDir, sizeof(appState->exeDir));
+    GetModuleFileNameA(nullptr, appState->exeDir, sizeof(appState->exeDir));
 
     i32 lastSlashIndex = -1;
     const char* scan = appState->exeDir;
@@ -1230,7 +1230,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                 ImGui::TextUnformatted(statusText);
             } else {
                 ASSERT(job->progressPct >= 0 && job->progressPct <= 100);
-                f32 target = job->progressPct / 100.0f;
+                f32 target = static_cast<f32>(job->progressPct) / 100.0f;
                 f32 diff = target - job->displayProgress;
                 //DEBUG_PRINTF("%.3f\n", diff);
                 f32 speed = diff > 0.1f ? 8.0f : 3.0f;
@@ -1262,9 +1262,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
                 ImVec4 colorA = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
                 ImVec4 colorB = ImGui::GetStyleColorVec4(ImGuiCol_Button);
-                ImVec4 color = ImVec4(colorB.x + (colorA.x - colorB.x) * t,
-                                      colorB.y + (colorA.y - colorB.y) * t,
-                                      colorB.z + (colorA.z - colorB.z) * t, 1.0f);
+                ImVec4 color = ImVec4(colorB.x + ((colorA.x - colorB.x) * t),
+                                      colorB.y + ((colorA.y - colorB.y) * t),
+                                      colorB.z + ((colorA.z - colorB.z) * t), 1.0f);
 
                 ImGui::PushStyleColor(ImGuiCol_Button, color);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
@@ -1353,8 +1353,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                           IM_COL32(150, 150, 150, 255));
 
     // Plus sign
-    f32 cx = pos.x + size * 0.35f;
-    f32 cy = pos.y + size * 0.65f;
+    f32 cx = pos.x + (size * 0.35f);
+    f32 cy = pos.y + (size * 0.65f);
     f32 arm = size * 0.15f;
     f32 thickness = 2.0f;
     dl->AddLine(ImVec2(cx - arm, cy), ImVec2(cx + arm, cy), IM_COL32(100, 220, 100, 255),
@@ -1622,7 +1622,7 @@ CreateDefaultConfigFile(const char* path) {
 static bool32
 LoadConfigFile(AppState* appState, const char* path) {
     HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, 0);
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
         DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
         return false;
@@ -1666,19 +1666,11 @@ LoadConfigFile(AppState* appState, const char* path) {
 
         // Section
         if (*p == '[') {
-            if (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
-                p[6] == ']') {
-                inSizes = true;
-            } else {
-                inSizes = false;
-            }
+            inSizes = (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
+                       p[6] == ']');
 
-            if (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
-                p[6] == 's' && p[7] == ']') {
-                inCodecs = true;
-            } else {
-                inCodecs = false;
-            }
+            inCodecs = (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
+                        p[6] == 's' && p[7] == ']');
 
             while (*p && *p != '\n') {
                 ++p;
@@ -1799,7 +1791,7 @@ LoadConfigFile(AppState* appState, const char* path) {
 }
 
 int WINAPI
-WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
+WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unused*/) {
     ImGui_ImplWin32_EnableDpiAwareness();
     f32 mainScale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
@@ -1919,7 +1911,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     snprintf(appState.ffmpegPath, sizeof(appState.ffmpegPath), "vendor\\ffmpeg\\");
 
     // Start worker thread
-    HANDLE workerThread = CreateThread(0, 0, WorkerThread, &appState, 0, 0);
+    HANDLE workerThread = CreateThread(nullptr, 0, WorkerThread, &appState, 0, nullptr);
     if (!workerThread) {
         DEBUG_PRINT("Couldn't create WorkerThread");
         return 0;
@@ -1949,8 +1941,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     QueryPerformanceFrequency(&freqCounter);
     gPerfFreq = freqCounter.QuadPart;
 
-    auto lastCounter = GetWallClock();
-    u64 lastCycleCount{ __rdtsc() };
+    auto currentCounter = GetWallClock();
+    u64 currentCycleCount{ __rdtsc() };
 
     f32 frameWorkAvgMs = 0.0f;
 
@@ -1961,12 +1953,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     while (running) {
         auto frameStart = GetWallClock();
         // For the first frame delta is ~0.0f, which is fine
-        f32 deltaMs = GetMsElapsed(lastCounter, frameStart);
+        f32 deltaMs = GetMsElapsed(currentCounter, frameStart);
         //f32 delta = deltaMs / 1000.0f;
         // We kinda have to clamp the delta as the file dialogs are blocking the main thread
         // so we end up with values like 10 seconds which break the progress bar animations and such
         f32 delta = ClampF32(deltaMs / 1000.0f, 0.0f, 0.05f);
-        lastCounter = frameStart;
+        currentCounter = frameStart;
 
         MSG msg;
         while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -2068,13 +2060,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         // Just noticed it's the same as a lerp!
         if (frameWorkMs < 1000.0f) {
             f32 alpha = 0.02f; // Bigger values make the reaction faster
-            frameWorkAvgMs = frameWorkMs * alpha + (1.0f - alpha) * frameWorkAvgMs;
+            frameWorkAvgMs = (frameWorkMs * alpha) + ((1.0f - alpha) * frameWorkAvgMs);
         }
 
         // RDTSC
         u64 endCycleCount = __rdtsc();
-        f32 cycleElapsedM = static_cast<f32>(endCycleCount - lastCycleCount) / (1000.0f * 1000.0f);
-        lastCycleCount = endCycleCount;
+        f32 cycleElapsedM =
+            static_cast<f32>(endCycleCount - currentCycleCount) / (1000.0f * 1000.0f);
+        currentCycleCount = endCycleCount;
 
         auto presentStart = GetWallClock();
         gSwap->Present(1, 0); // (1, 0) -> vsync, otherwise we hog the cpu quite a lot

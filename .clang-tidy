@@ -1,0 +1,59 @@
+# https://releases.llvm.org/21.1.0/tools/clang/tools/extra/docs/clang-tidy/index.html
+# Clang tidy file for all files
+# Windows platform layer has its own, slightly modified settings
+
+# Use the run_clang_tidy.sh script
+# Otherwise one would need to construct the compile_commands.json manually
+
+---
+Checks: >
+  -*,
+
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-suspicious-include,
+
+  clang-analyzer-*,
+  performance-*,
+  portability-*,
+
+  misc-*,
+  -misc-use-anonymous-namespace,
+  -misc-include-cleaner,
+  -misc-definitions-in-headers,
+  -misc-non-private-member-variables-in-classes,
+  -misc-const-correctness,
+
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-std-numbers,
+  -modernize-use-using,
+  -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
+  -modernize-avoid-c-arrays,
+  -modernize-use-auto,
+
+  readability-*,
+  -readability-function-cognitive-complexity,
+  -readability-implicit-bool-conversion,
+  -readability-avoid-unconditional-preprocessor-if,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-uppercase-literal-suffix,
+  -readability-use-std-min-max,
+  -readability-isolate-declaration,
+
+#CheckOptions:
+#  - key: readability-function-cognitive-complexity.Threshold
+#    value: '50'
+
+WarningsAsErrors: ''
+HeaderFileExtensions:
+  - h
+ImplementationFileExtensions:
+  - cpp
+HeaderFilterRegex: 'src/.*'
+ExcludeHeaderFilterRegex: ''
+FormatStyle: 'file'
+...
