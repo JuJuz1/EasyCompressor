@@ -1002,6 +1002,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SameLine();
     ImGui::BeginDisabled(compressing);
 
+    /// Codec
+
     Codec currentCodec = appState->defaultCodec;
     if (ImGui::RadioButton("H.264", appState->defaultCodec == Codec::H264)) {
         appState->defaultCodec = Codec::H264;
@@ -1051,10 +1053,15 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 
     /// Table
+
     // TODO: allow sorting based on input/output?
     // This is just an idea and in no means a necessary feature
     // At least for file info (size or duration or both???, both might not be feasible or even
     // necessary), target size and status
+
+    // Disable the visual feedback of BeginDisabled (making the DisabledAlpha 0.5f)
+    // when doing probing to avoid flashing the texts annoyingly
+    bool32 alphaDisabledModified = false;
 
     if (ImGui::BeginTable("jobs", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
@@ -1074,10 +1081,15 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         // Otherwise it's too much work to get right
         // This is because when we hit start, the WorkerThread stores the count of jobs at that time
         i32 highestRunningIndex = -1;
-        for (i32 j = 0; j < appState->jobCount; ++j) {
-            if (appState->jobs[j].status == JobStatus::RUNNING_PROBE ||
-                appState->jobs[j].status == JobStatus::RUNNING_COMPRESS) {
-                highestRunningIndex = j;
+        for (i32 i = 0; i < appState->jobCount; ++i) {
+            auto status = appState->jobs[i].status;
+            if (status == JobStatus::RUNNING_PROBE || status == JobStatus::RUNNING_COMPRESS) {
+                highestRunningIndex = i;
+                // Alpha disabled modifier
+                if (status == JobStatus::RUNNING_PROBE) {
+                    alphaDisabledModified = true;
+                    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
+                }
             }
         }
 
@@ -1376,6 +1388,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 
     ImGui::EndDisabled();
+
+    // Remove the global alpha disabled modifier
+    if (alphaDisabledModified) {
+        ImGui::PopStyleVar();
+    }
+
     ImGui::End();
 
     /// ImGui::End()
