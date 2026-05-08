@@ -1952,6 +1952,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     auto lastCounter = GetWallClock();
     u64 lastCycleCount{ __rdtsc() };
 
+    f32 frameWorkAvgMs = 0.0f;
+
     bool32 running = true;
 
     //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
@@ -2042,8 +2044,32 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         auto frameWorkEnd = GetWallClock();
         f32 frameWorkMs = GetMsElapsed(frameStart, frameWorkEnd);
+        // NOTE: in a real system one would not probably do this as this is purely to account for
+        // the blocking nature of the file dialogs inside DrawUI
+        // I guess this stems from the fact that we are using ImGui and not storing the state it
+        // produces anywhere when clicking UI elements.
+        // IMPORTANT: If we were to store the state and only after drawing the UI, no matter the
+        // blocking nature, we would catch true frame drops and such
+
+        // This is also assuming we correctly scope our profiling timings and not just blindly do
+        // frameEnd - frameStart, as there might have been blocking functions along the way
+        // But for now these blocking functions only disturb that frame's timing so it's probably
+        // fine along with a small alpha value like 0.02f, so we really don't even need the clamp
+        // IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls like 1 second
+        // Currently the fps gets skewed for 1 frame but that's it really
+        //f32 clampedFrameWorkMs =
+        //    ClampF32(frameWorkMs, 0.0f, (1.0f / 60.0f) * 1000.0f); // Clamp to max of 60 fps
+
         //lastCounter = frameEnd;
         f32 fps = 1000.0f / frameWorkMs;
+
+        // Calculate average frameWorkMs using
+        // Exponential smoothing: https://en.wikipedia.org/wiki/Exponential_smoothing
+        // Just noticed it's the same as a lerp!
+        if (frameWorkMs < 1000.0f) {
+            f32 alpha = 0.02f; // Bigger values make the reaction faster
+            frameWorkAvgMs = frameWorkMs * alpha + (1.0f - alpha) * frameWorkAvgMs;
+        }
 
         // RDTSC
         u64 endCycleCount = __rdtsc();
@@ -2055,9 +2081,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         auto presentEnd = GetWallClock();
         f32 presentMs = GetMsElapsed(presentStart, presentEnd);
 #if 0
-        PRINTF("frame: %.5f ms | msg: %.5f ms | ui: %.5f ms | render: %.5f ms | present: "
-               "%.5f ms\nFPS: %.0f | cycles: %.4f M\n",
-               frameMs, msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
+        PRINTF("frame work: %.5f (avg: %.5f) ms | msg: %.5f ms | ui: %.5f ms | render: "
+               "%.5f ms | present: %.5f ms\nFPS: %.0f | cycles: %.4f M\n",
+               frameWorkMs, frameWorkAvgMs, msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
 #else
         (void)(msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
 #endif
