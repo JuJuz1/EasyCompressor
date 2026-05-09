@@ -3,7 +3,7 @@
 IF NOT EXIST build mkdir build
 pushd build
 
-set commonCompilerDefines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_INTERNAL=1 -DCOMPRESSOR_DEBUG=1
+set commonCompilerDefines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_DEV=1 -DCOMPRESSOR_DEBUG=1
 
 rem /FAs /Fm, .asm and .map
 rem /MT for release

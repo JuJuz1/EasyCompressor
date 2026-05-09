@@ -998,7 +998,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     bool32 cancelled = _InterlockedCompareExchange(&appState->cancelRequested, 0, 0);
     bool32 noJobs = appState->jobCount == 0;
 
-#if COMPRESSOR_INTERNAL
+#if COMPRESSOR_DEV
     ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
 #endif
 
@@ -1828,18 +1828,18 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
     const char* name = "EasyCompressor";
-    WNDCLASSEXA windowClass = { sizeof(windowClass),
-                                CS_CLASSDC,
-                                WndProc,
-                                0,
-                                0,
-                                hInstance,
-                                nullptr,
-                                nullptr,
-                                nullptr,
-                                nullptr,
-                                name,
-                                nullptr };
+    char windowName[29];
+    snprintf(windowName, sizeof(windowName), name);
+#if COMPRESSOR_DEV
+    snprintf(windowName, sizeof(windowName), "%s | DEV", windowName);
+#endif
+#if COMPRESSOR_DEBUG
+    snprintf(windowName, sizeof(windowName), "%s | DEBUG", windowName);
+#endif
+
+    WNDCLASSEXA windowClass = { sizeof(windowClass), CS_CLASSDC, WndProc, 0,       0,
+                                hInstance,           nullptr,    nullptr, nullptr, nullptr,
+                                windowName,          nullptr };
 
     if (!RegisterClassExA(&windowClass)) {
         DEBUG_PRINT("Failed to register windowClass!\n");
@@ -1847,7 +1847,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     }
 
     HWND hWnd =
-        CreateWindowExA(0, windowClass.lpszClassName, name, WS_OVERLAPPEDWINDOW, 100, 100,
+        CreateWindowExA(0, windowClass.lpszClassName, windowName, WS_OVERLAPPEDWINDOW, 100, 100,
                         static_cast<i32>(1280 * mainScale), static_cast<i32>(800 * mainScale),
                         nullptr, nullptr, hInstance, nullptr);
 
@@ -1951,7 +1951,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     appState.workerThread = workerThread;
 
 // Test data
-#if COMPRESSOR_INTERNAL
+#if COMPRESSOR_DEV
     DEBUG_PRINT("Adding test files at startup...\n");
 
     char testPath1[MAX_PATH_COUNT];
