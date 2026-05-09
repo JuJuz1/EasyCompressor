@@ -230,6 +230,12 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
         return;
     }
 
+    // Will hit this if we start the drag before compression starts and then drop when compressing
+    //ASSERT(from > highestRunningIndex && to > highestRunningIndex);
+    if (from <= highestRunningIndex || to <= highestRunningIndex) {
+        return;
+    }
+
     UIJob tmp = appState->jobs[from];
     ASSERT(tmp.status != JobStatus::RUNNING_PROBE && tmp.status != JobStatus::RUNNING_COMPRESS);
     ASSERT(appState->jobs[to].status != JobStatus::RUNNING_PROBE &&
@@ -237,11 +243,6 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
     if (tmp.status == JobStatus::RUNNING_PROBE || tmp.status == JobStatus::RUNNING_COMPRESS ||
         appState->jobs[to].status == JobStatus::RUNNING_PROBE ||
         appState->jobs[to].status == JobStatus::RUNNING_COMPRESS) {
-        return;
-    }
-
-    ASSERT(from > highestRunningIndex && to > highestRunningIndex);
-    if (from <= highestRunningIndex || to <= highestRunningIndex) {
         return;
     }
 
