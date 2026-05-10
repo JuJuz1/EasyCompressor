@@ -71,6 +71,7 @@ imgui.ini
 
 # Test data
 *.mp4
+*.mov
 
 # Script generated compile_commands.json for clang-tidy
 compile_commands.json

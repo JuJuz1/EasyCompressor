@@ -175,7 +175,7 @@ AddJob(AppState* appState, const char* path) {
     }
 
     // No file extension found...
-    // Don't fail but construct a default path without the extension but with _compressed
+    // Don't fail, but construct a default path without the extension but with _compressed
     if (!lastDot) {
         DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
         snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
@@ -1090,9 +1090,38 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     // when doing probing to avoid flashing the texts annoyingly
     bool32 alphaDisabledModified = false;
 
+    // Only allow reordering of jobs that are above the current running index
+    // Otherwise it's too much work to get right
+    // This is because when we hit start, the WorkerThread stores the count of jobs at that time
+    i32 highestRunningIndex = -1;
+    for (i32 i = 0; i < appState->jobCount; ++i) {
+        auto status = appState->jobs[i].status;
+        if (status == JobStatus::RUNNING_PROBE || status == JobStatus::RUNNING_COMPRESS) {
+            highestRunningIndex = i;
+            // Alpha disabled modifier
+            if (status == JobStatus::RUNNING_PROBE && !alphaDisabledModified) {
+                alphaDisabledModified = true;
+                // This has to be done before BeginTable if ScrollX or Y is enabled as it internally
+                // does BeginChild
+                ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
+            }
+        }
+    }
+
+    f32 headerHeight = ImGui::GetFrameHeight();
+    f32 rowHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
+    f32 footerHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f;
+
+    ImVec2 tableSize(0.0f, ImClamp(headerHeight + rowHeight * appState->jobCount,
+                                   0.0f, //ImGui::GetContentRegionAvail().y - footerHeight, make the
+                                         // table full window height accounting for footer
+                                   ImGui::GetContentRegionAvail().y - footerHeight));
+
     if (ImGui::BeginTable("jobs", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                              ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable)) {
+                              ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_Resizable |
+                              ImGuiTableFlags_ScrollY,
+                          tableSize)) {
         ImGui::TableSetupColumn(
             "#", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, 20 * scale);
         ImGui::TableSetupColumn("Input/Output", ImGuiTableColumnFlags_WidthStretch);
@@ -1104,28 +1133,11 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
         i32 moveFromIndex = -1, moveToIndex = -1, removeIndex = -1;
 
-        // Only allow reordering of jobs that are above the current running index
-        // Otherwise it's too much work to get right
-        // This is because when we hit start, the WorkerThread stores the count of jobs at that time
-        i32 highestRunningIndex = -1;
-        for (i32 i = 0; i < appState->jobCount; ++i) {
-            auto status = appState->jobs[i].status;
-            if (status == JobStatus::RUNNING_PROBE || status == JobStatus::RUNNING_COMPRESS) {
-                highestRunningIndex = i;
-                // Alpha disabled modifier
-                if (status == JobStatus::RUNNING_PROBE) {
-                    alphaDisabledModified = true;
-                    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
-                }
-            }
-        }
-
         for (i32 i = 0; i < appState->jobCount; ++i) {
             UIJob* job = &appState->jobs[i];
 
             bool32 jobRunning = job->status == JobStatus::RUNNING_PROBE ||
                                 job->status == JobStatus::RUNNING_COMPRESS;
-            compressing |= jobRunning;
 
             ImGui::PushID(i);
             ImGui::TableNextRow();
