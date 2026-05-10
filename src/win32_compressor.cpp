@@ -1087,7 +1087,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     // necessary), target size and status
 
     // Disable the visual feedback of BeginDisabled (making the DisabledAlpha 0.5f)
-    // when doing probing to avoid flashing the texts annoyingly
+    // when doing probing to avoid flashing texts and button texts annoyingly
     bool32 alphaDisabledModified = false;
 
     // Only allow reordering of jobs that are above the current running index
@@ -1098,7 +1098,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         auto status = appState->jobs[i].status;
         if (status == JobStatus::RUNNING_PROBE || status == JobStatus::RUNNING_COMPRESS) {
             highestRunningIndex = i;
-            // Alpha disabled modifier
+            // Alpha disabled modifier when any job is running probe, see above
             if (status == JobStatus::RUNNING_PROBE && !alphaDisabledModified) {
                 alphaDisabledModified = true;
                 // This has to be done before BeginTable if ScrollX or Y is enabled as it internally
@@ -1108,6 +1108,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
     }
 
+    // These are a bit shaky, lucky that they calculate it correctly but at least they do :)
     f32 headerHeight = ImGui::GetFrameHeight();
     f32 rowHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
     f32 footerHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f;
@@ -1228,6 +1229,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             f32* targetSize = &job->targetSizeMb;
             bool32 tooLargeBefore = *targetSize >= job->inputFileSize;
             if (tooLargeBefore) {
+                // Make red
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.1f, 0.1f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.15f, 0.15f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
@@ -1353,7 +1355,14 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     ImGui::EndDisabled();
 
+    // Remove the global alpha disabled modifier, had to do some debugging shenanighans to figure
+    // out why the cancel button was shown with 1.0f alpha...
+    if (alphaDisabledModified) {
+        ImGui::PopStyleVar();
+    }
+
     ImGui::SameLine();
+    // !(!compressing || cancelled || noJobs) == compressing && !cancelled && !noJobs
     ImGui::BeginDisabled(!compressing || cancelled || noJobs);
     if (ImGui::Button("Cancel")) {
         CancelBatch(appState);
@@ -1427,11 +1436,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 
     ImGui::EndDisabled();
-
-    // Remove the global alpha disabled modifier
-    if (alphaDisabledModified) {
-        ImGui::PopStyleVar();
-    }
 
     ImGui::End();
 
