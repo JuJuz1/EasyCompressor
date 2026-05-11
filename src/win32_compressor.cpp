@@ -64,7 +64,7 @@ DEBUG_PRINT(const char* msg) {
 
 static void
 DEBUG_PRINTF(const char* fmt, ...) {
-    // TODO: for my debug purposes this is enough
+    // For my debugging purposes this is enough
     char buf[512];
     va_list args;
     va_start(args, fmt);
@@ -152,12 +152,6 @@ AddJob(AppState* appState, const char* path) {
         DEBUG_PRINT("Jobs full!\n");
         return;
     }
-
-    // TODO: If we allow adding, have to think about the UX a bit more
-    //if (_InterlockedCompareExchange(&appState->compressing, 1, 1)) {
-    //    DEBUG_PRINT("Can't add job while compressing!\n");
-    //    return;
-    //}
 
     UIJob* j = &appState->jobs[appState->jobCount];
     *j = {}; // *j = UIJob{}; Compiler error when using /O2. Now seems fine?
@@ -441,26 +435,21 @@ RunCompress(AppState* appState, UIJob* job) {
     }
 
     // TODO: 4-5% is enough, 3% might be cutting it too close
-    // TODO: for 10 MB 3% is good, for smaller targets might not be able to hit
+    // For 10 MB 3% is good, for smaller targets might not be able to hit
     // If target size is lass than 10 maybe then use like 5%
     f32 multiplier = 0.97f;
     f32 videoKbps = (totalKbps - audioKbps) * multiplier;
+    ASSERT(videoKbps >= 50.0f);
     if (videoKbps < 50.0f) {
         DEBUG_PRINT("Target size too small for this video duration "
                     "(video bitrate would be < 50 kbps), ABORTING\n");
-        // TODO: cancel? and continue
+        // TODO: when are we going to really hit this case? remove?
         return;
     }
 
     DEBUG_PRINTF("Target: %.2f MB | total: %.1f kbps | video * %.2f: %.1f kbps | audio: %.1f "
                  "kbps\n",
                  job->targetSizeMb, totalKbps, multiplier, videoKbps, audioKbps);
-
-    ASSERT(appState->defaultCodec != Codec::NONE);
-    if (appState->defaultCodec == Codec::NONE) {
-        DEBUG_PRINT("Codec was NONE, aborting compression\n");
-        return;
-    }
 
     // TODO: different presets?? maybe not needed
     const char* codec = CodecText_(appState->defaultCodec);
@@ -816,7 +805,11 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     ofn.hInstance = hInstance;
 
     // TODO: more extensions
-    ofn.lpstrFilter = "MP4 Video (*.mp4)\0*.mp4\0All Files\0*.*\0";
+    // TODO: not all are tested but ffmpeg should support these with no problem
+    ofn.lpstrFilter = "Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
+                      "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
+                      "All Files (*.*)\0"
+                      "*.*\0";
     ofn.lpstrFile = buffer;
     ofn.lpstrTitle = "Select output file";
     ofn.nMaxFile = sizeof(buffer);
@@ -861,7 +854,10 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     ofn.hInstance = hInstance;
 
     // TODO: more extensions
-    ofn.lpstrFilter = "MP4 Video (*.mp4)\0*.mp4\0All Files\0*.*\0";
+    ofn.lpstrFilter = "Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
+                      "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
+                      "All Files (*.*)\0"
+                      "*.*\0";
     ofn.lpstrFile = buffer;
     ofn.lpstrTitle = "Select input files";
     ofn.nMaxFile = sizeof(buffer);
@@ -1448,7 +1444,6 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     // We have to do popup stuff here
 
-    // TODO: allow closing with Esc
     //ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
     //                        ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
@@ -1587,6 +1582,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
         // TODO: validate by most common video file extensions?
+        // We do allow files with no extension so probably not...
         for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
             char path[MAX_PATH_COUNT];
             // Query the required character amount first, not including null terminator
@@ -1605,7 +1601,8 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 DEBUG_PRINTF("Path was truncated, didn't add job! Max length: %d\nPath would have "
                              "been %s\n",
                              MAX_PATH_COUNT, path);
-                // TODO: show error for user for discarded files
+                // TODO: show error for user for discarded files, or no? It's quite self-evident
+                // what is happening
                 continue;
             }
 
@@ -2064,7 +2061,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             // Otherwise we have to press control + A twice to enter here
             // Likely due to the blocking nature of the function so ImGui gets confused
             // Although it definitely should not get confused...
-            //io.ClearInputKeys();
+            io.ClearInputKeys();
         }
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
@@ -2072,9 +2069,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         } else {
             appState.uiState.escJustPressed = false;
         }
-
-        // Do this after all inputs have been processed
-        io.ClearInputKeys();
 
         /// Draw
 
