@@ -1,5 +1,8 @@
 /*
-    A simple ImGui UI wrapper for compressing files using ffmpeg
+    A simple ImGui GUI wrapper for compressing files using ffmpeg
+
+    The atomic reads via _Interlocked* might never be needed here as 32-bit reads and writes might
+    be already guaranteed to be atomic on x86
 */
 
 // TODO: UNICODE SUPPORT?
@@ -156,7 +159,7 @@ AddJob(AppState* appState, const char* path) {
     //    return;
     //}
 
-    UIJob* j = &appState->jobs[appState->jobCount++];
+    UIJob* j = &appState->jobs[appState->jobCount];
     *j = {}; // *j = UIJob{}; Compiler error when using /O2. Now seems fine?
     //ZeroMemory(j, sizeof(j)); nasty stuff, not dereferencing
 
@@ -199,6 +202,8 @@ AddJob(AppState* appState, const char* path) {
         DEBUG_PRINT("Failed to get file size!\n");
     }
 
+    // Publish the new job at the end
+    _InterlockedExchange(&appState->jobCount, appState->jobCount + 1);
     DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
                  appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
 }
@@ -213,11 +218,12 @@ RemoveJob(AppState* appState, i32 index) {
 
     DEBUG_PRINTF("Removed job %d\n", index);
 
-    for (i32 i = index; i < appState->jobCount - 1; ++i) {
+    i32 newJobCount = appState->jobCount - 1;
+    for (i32 i = index; i < newJobCount; ++i) {
         appState->jobs[i] = appState->jobs[i + 1];
     }
 
-    appState->jobCount--;
+    _InterlockedExchange(&appState->jobCount, newJobCount);
 }
 
 static void
@@ -710,7 +716,6 @@ static DWORD WINAPI
 WorkerThread(void* param) {
     AppState* appState = static_cast<AppState*>(param);
 
-    // TODO: move away from spin lock? but this is just much simpler...
     while (true) {
         i32 jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
         for (i32 i = 0; i < jobCount; ++i) {
@@ -1063,7 +1068,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     for (i32 i = 0; i < ARRAY_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];
-        // Default value which is filled if the user supplied less than SIZES_COUNT
+        // Default value which is filled if the user supplied less than TARGET_SIZES_COUNT
         if (size == 0.0f) {
             continue;
         }
@@ -1432,7 +1437,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Clear", ImVec2(80 * scale, 0))) {
         DEBUG_PRINT("Clear\n");
-        appState->jobCount = 0;
+        _InterlockedExchange(&appState->jobCount, 0);
     }
 
     ImGui::EndDisabled();
@@ -1443,8 +1448,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     // We have to do popup stuff here
 
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    // TODO: allow closing with Esc
+    //ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+    //                        ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse)) {

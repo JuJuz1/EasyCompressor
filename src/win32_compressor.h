@@ -36,7 +36,7 @@ struct UIJob {
     volatile long status;      // JobStatus
     volatile long progressPct; // 0..100 (compression progress only)
     //Codec codec;
-    //Preset preset;
+    //Preset preset; different quality vs a target size, don't think this is needed
 
     f32 resultFileSize;
 
@@ -53,7 +53,7 @@ struct UIJob {
 #define MIN_TARGET_SIZE 0.5f
 #define MAX_TARGET_SIZE 5000.0f
 
-#define SIZES_COUNT 5
+#define TARGET_SIZES_COUNT 5
 
 // Mainly for popup dialogs
 struct UIState {
@@ -71,7 +71,7 @@ struct AppState {
     HANDLE workerThread;
 
     f32 defaultTargetSize;
-    f32 targetSizes[SIZES_COUNT];
+    f32 targetSizes[TARGET_SIZES_COUNT];
     Codec defaultCodec;
 
     // All UI state with ImGui
