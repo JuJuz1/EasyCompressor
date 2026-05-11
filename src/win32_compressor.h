@@ -58,6 +58,7 @@ struct UIJob {
 // Mainly for popup dialogs
 struct UIState {
     bool32 helpAboutClicked;
+    bool32 escJustPressed; // Here for now becase we really don't need a whole lot of inputs
 };
 
 struct AppState {

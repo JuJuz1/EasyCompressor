@@ -1465,7 +1465,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::TextUnformatted("Small target sizes (below 10 MB) might result in the\ncompressed "
                                "size being slightly above the target size");
 
-        if (ImGui::Button("OK")) {
+        if (ImGui::Button("OK") || uiState->escJustPressed) {
             ImGui::CloseCurrentPopup();
         }
 
@@ -2054,7 +2054,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         /// Input
 
         // If we use ImGui input it has to be inside ImGui::NewFrame()
-        //HandleInput(); ??
+        //HandleInput(); ?? if we get more inputs -> YES
+
         // Now it works with io.ClearInputKeys();
         // Still consider using something like SDL if porting
         bool32 ctrlPressed = ImGui::IsKeyDown(ImGuiKey_LeftCtrl);
@@ -2063,8 +2064,17 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             // Otherwise we have to press control + A twice to enter here
             // Likely due to the blocking nature of the function so ImGui gets confused
             // Although it definitely should not get confused...
-            io.ClearInputKeys();
+            //io.ClearInputKeys();
         }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            appState.uiState.escJustPressed = true;
+        } else {
+            appState.uiState.escJustPressed = false;
+        }
+
+        // Do this after all inputs have been processed
+        io.ClearInputKeys();
 
         /// Draw
 
