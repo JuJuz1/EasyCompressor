@@ -276,10 +276,9 @@ StrToF32(const char* start) {
     return result;
 }
 
-// -----------------------------------------------------------------------------
-// Worker thread, runs jobs sequentially. For parallel encoding, spawn N of these
-// and have them pop jobs off a shared index with InterlockedIncrement
-// -----------------------------------------------------------------------------
+/// -----------------------------------------------------------------------------
+/// WorkerThread jobs
+/// -----------------------------------------------------------------------------
 
 static void
 RunProbe(AppState* appState, UIJob* job) {
@@ -499,8 +498,8 @@ RunCompress(AppState* appState, UIJob* job) {
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
         snprintf(cmd, sizeof(cmd),
-                 "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i %s -c:v %s -preset medium -b:v %.0fk "
+                 "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
                  "-pass 1 -an -f null %s",
                  //"-pass 1 -passlogfile %s -an -f null %s",
                  appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV);
@@ -605,11 +604,11 @@ RunCompress(AppState* appState, UIJob* job) {
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
         snprintf(cmd, sizeof(cmd),
-                 "%sffmpeg -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i %s -c:v %s -preset medium -b:v %.0fk "
+                 "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
                  "-pass 2 "
                  //"-pass 2 -passlogfile %s "
-                 "-c:a aac -b:a %.0fk -movflags +faststart %s",
+                 "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
                  appState->ffmpegPath, job->input, codec, videoKbps //, passLog
                  ,
                  audioKbps, job->output);
@@ -762,9 +761,9 @@ StartBatch(AppState* appState) {
     DEBUG_PRINT("Start clicked\n");
 }
 
-// -----------------------------------------------------------------------------
+//// -----------------------------------------------------------------------------
 /// Path stuff
-// -----------------------------------------------------------------------------
+//// -----------------------------------------------------------------------------
 
 static void
 GetExeDirectory(AppState* appState) {
@@ -894,9 +893,9 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     }
 }
 
-// -----------------------------------------------------------------------------
-// ImGui
-// -----------------------------------------------------------------------------
+/// -----------------------------------------------------------------------------
+/// ImGui
+/// -----------------------------------------------------------------------------
 
 static const char*
 JobStatusText(JobStatus s) {
@@ -1474,9 +1473,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 }
 
-// -----------------------------------------------------------------------------
+/// -----------------------------------------------------------------------------
 /// Win32 / DX11 boilerplate (from the ImGui example, trimmed)
-// -----------------------------------------------------------------------------
+/// -----------------------------------------------------------------------------
 
 static ID3D11Device* gDevice;
 static ID3D11DeviceContext* gContext;

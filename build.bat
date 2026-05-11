@@ -17,8 +17,8 @@ rem /FAs /Fm, .asm and .map
 rem /LTCG link time optimization, not really used for unity builds I suppose
 rem not used: /Zc:__cplusplus
 
-set defines=-DCOMPRESSOR_WIN32=1
-set flags=/W4 /FC /Oi /EHa- /GR- /GS- /std:c++20 /nologo
+set defines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_DEBUG=1
+set flags=/W4 /FC /Oi /EHa- /GR- /GS /std:c++20 /nologo
 
 rem Couldn't get AddressSanitizer to be found automatically
 rem so just copied the clang_rt.asan_dynamic-x86_64.dll to root...
@@ -43,7 +43,8 @@ if !config! == debug (
     rem /fsanitize=address
     set flags=!flags! /MTd /Od /Zi
 ) else if !config! == release (
-    set flags=!flags! /MT /O2
+    rem /MT /O2
+    set flags=!flags! /MD /Od /Zi
 )
 
 echo !defines!
@@ -51,7 +52,9 @@ echo !flags!
 set flags=!defines! !flags!
 
 rem TODO: take a look at /FIXED
-set linkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:REF /OPT:ICF /FIXED /merge:_RDATA=.rdata /SUBSYSTEM:WINDOWS
+rem TODO: examine flags that might make Microsoft Defender flag as a virus
+rem set linkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:REF /OPT:ICF /FIXED /merge:_RDATA=.rdata /SUBSYSTEM:WINDOWS
+set linkerFlags=/SUBSYSTEM:WINDOWS
 
 rem libraries
 set win32Libraries=Kernel32.lib User32.lib Shell32.lib Comdlg32.lib
