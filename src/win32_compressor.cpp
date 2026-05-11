@@ -81,6 +81,7 @@ DEBUG_PRINTF(const char* fmt, ...) {
 #endif
 
 // Used in both debug and release
+// TODO: figure out a way to disable all printing for a true release version
 static void
 PRINTF(const char* fmt, ...) {
     char buf[512];

@@ -78,3 +78,6 @@ imgui.ini
 
 # Script generated compile_commands.json for clang-tidy
 compile_commands.json
+
+# MSVC cl /help output
+msvc_help.txt
