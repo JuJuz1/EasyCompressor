@@ -1136,15 +1136,45 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, 10.0f);
 
-    if (ImGui::Button("Pick a default output folder")) {
-        PickDefaultOutputFolder(hWnd, appState);
-    }
+    ImGui::TextUnformatted("Default output folder:");
 
     ImGui::SameLine();
     if (appState->defaultOutputFolder[0] == '\0') {
         ImGui::TextUnformatted("No default folder selected");
     } else {
-        ImGui::Text("%s", appState->defaultOutputFolder);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
+
+        // TODO: easily configurable if needed
+        const f32 maxWidth = 550.0f;
+        f32 requiredWidth = ImGui::CalcTextSize(appState->defaultOutputFolder).x;
+        requiredWidth = ClampF32(requiredWidth, 0.0f, maxWidth);
+
+        ImGui::PushItemWidth(requiredWidth);
+        ImGui::Selectable(appState->defaultOutputFolder, false, 0, ImVec2(requiredWidth, 0.0f));
+        ImGui::PopItemWidth();
+        ImGui::PopStyleColor();
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text(appState->defaultOutputFolder);
+            ImGui::TextUnformatted("Click to change folder\n"
+                                   "Middle click to open folder in explorer\n"
+                                   "Right click for more options");
+            ImGui::EndTooltip();
+        }
+
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            PickDefaultOutputFolder(hWnd, appState);
+            ImGui::GetIO().ClearInputMouse();
+        } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
+            OpenInExplorer(hWnd, appState->defaultOutputFolder);
+        } else if (ImGui::BeginPopupContextItem("default_folder_menu")) {
+            if (ImGui::MenuItem("Open folder in explorer...")) {
+                OpenInExplorer(hWnd, appState->defaultOutputFolder);
+            }
+
+            ImGui::EndPopup();
+        }
     }
 
     ImGui::SameLine();
@@ -1190,8 +1220,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             // Alpha disabled modifier when any job is running probe, see above
             if (status == JobStatus::RUNNING_PROBE && !alphaDisabledModified) {
                 alphaDisabledModified = true;
-                // This has to be done before BeginTable if ScrollX or Y is enabled as it internally
-                // does BeginChild
+                // This has to be done before BeginTable if ScrollX or Y is enabled as it
+                // internally does BeginChild
                 ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
             }
         }
@@ -1282,9 +1312,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Click to change output directory\n");
-                ImGui::TextUnformatted("Middle click to open input in explorer\n");
-                ImGui::TextUnformatted("Right click for more options\n");
+                ImGui::TextUnformatted("Click to change output directory\n"
+                                       "Middle click to open input in explorer\n"
+                                       "Right click for more options");
                 ImGui::EndTooltip();
             }
 
@@ -1444,8 +1474,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     ImGui::EndDisabled();
 
-    // Remove the global alpha disabled modifier, had to do some debugging shenanighans to figure
-    // out why the cancel button was shown with 1.0f alpha...
+    // Remove the global alpha disabled modifier, had to do some debugging shenanighans to
+    // figure out why the cancel button was shown with 1.0f alpha...
     if (alphaDisabledModified) {
         ImGui::PopStyleVar();
     }
@@ -2123,7 +2153,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         f32 deltaMs = GetMsElapsed(currentCounter, frameStart);
         //f32 delta = deltaMs / 1000.0f;
         // We kinda have to clamp the delta as the file dialogs are blocking the main thread
-        // so we end up with values like 10 seconds which break the progress bar animations and such
+        // so we end up with values like 10 seconds which break the progress bar animations and
+        // such
         f32 delta = ClampF32(deltaMs / 1000.0f, 0.0f, 0.05f);
         currentCounter = frameStart;
 
@@ -2210,19 +2241,18 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
         auto frameWorkEnd = GetWallClock();
         f32 frameWorkMs = GetMsElapsed(frameStart, frameWorkEnd);
-        // NOTE: in a real system one would not probably do this as this is purely to account for
-        // the blocking nature of the file dialogs inside DrawUI
-        // I guess this stems from the fact that we are using ImGui and not storing the state it
-        // produces anywhere when clicking UI elements.
-        // IMPORTANT: If we were to store the state and only after drawing the UI, no matter the
-        // blocking nature, we would catch true frame drops and such
+        // NOTE: in a real system one would not probably do this as this is purely to account
+        // for the blocking nature of the file dialogs inside DrawUI I guess this stems from the
+        // fact that we are using ImGui and not storing the state it produces anywhere when
+        // clicking UI elements. IMPORTANT: If we were to store the state and only after drawing
+        // the UI, no matter the blocking nature, we would catch true frame drops and such
 
-        // This is also assuming we correctly scope our profiling timings and not just blindly do
-        // frameEnd - frameStart, as there might have been blocking functions along the way
-        // But for now these blocking functions only disturb that frame's timing so it's probably
-        // fine along with a small alpha value like 0.02f, so we really don't even need the clamp
-        // IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls like 1 second
-        // Currently the fps gets skewed for 1 frame but that's it really
+        // This is also assuming we correctly scope our profiling timings and not just blindly
+        // do frameEnd - frameStart, as there might have been blocking functions along the way
+        // But for now these blocking functions only disturb that frame's timing so it's
+        // probably fine along with a small alpha value like 0.02f, so we really don't even need
+        // the clamp IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls
+        // like 1 second. Currently the fps gets skewed for 1 frame but that's it really
 
         //f32 clampedFrameWorkMs =
         //    ClampF32(frameWorkMs, 0.0f, (1.0f / 60.0f) * 1000.0f); // Clamp to max of 60 fps
