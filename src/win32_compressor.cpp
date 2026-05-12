@@ -19,8 +19,7 @@
 
 #    include <cderr.h>       // CommDlg errors
 #    include <commdlg.h>     // OFN, GetSaveFileNameA
-#    include <process.h>     // _beginthreadex
-#    include <shlobj_core.h> // SHGetFolderPathA
+#    include <shlobj_core.h> // SHGetFolderPathA, SHBrowseForFolderA
 
 // Windows...
 #    ifdef ERROR
@@ -148,23 +147,12 @@ CodecText_(Codec s) {
 }
 
 static void
-AddJob(AppState* appState, const char* path) {
-    if (appState->jobCount >= MAX_JOBS) {
-        DEBUG_PRINT("Jobs full!\n");
-        return;
-    }
-
-    UIJob* j = &appState->jobs[appState->jobCount];
-    *j = {}; // *j = UIJob{}; Compiler error when using /O2. Now seems fine?
-    //ZeroMemory(j, sizeof(j)); nasty stuff, not dereferencing
-
-    j->status = JobStatus::QUEUED;
-    j->targetSizeMb = appState->defaultTargetSize;
-
+ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
     snprintf(j->input, sizeof(j->input), "%s", path);
 
     // TODO: maybe just use a dedicated output folder and use the input name as output
     // that way we wouldn't have to do this string processing nonsense
+
     const char* lastDot = nullptr;
     for (const char* scan = j->input; *scan; ++scan) {
         if (*scan == '.') {
@@ -176,7 +164,29 @@ AddJob(AppState* appState, const char* path) {
     // Don't fail, but construct a default path without the extension but with _compressed
     if (!lastDot) {
         DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
-        snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
+        if (appState->useDefaultOutputFolder) {
+            ASSERT(appState->defaultOutputFolder[0] != '\0');
+            const char* lastSlash = nullptr;
+            for (const char* scan = j->input; *scan; ++scan) {
+                if (*scan == PATH_SEP) {
+                    lastSlash = scan + 1;
+                }
+            }
+
+            if (lastSlash) {
+                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed",
+                         appState->defaultOutputFolder, lastSlash);
+            } else {
+                // This kind of should never happen
+                // TODO: fallback to using the default input path just like when no default output
+                // folder is selected? This will change if we always require a default output folder
+                // even if it can be disabled or not!
+                ASSERT(false);
+            }
+
+        } else {
+            snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
+        }
     } else {
         i32 extensionLen = StrLength(lastDot);
         i32 inputLen = StrLength(j->input);
@@ -186,8 +196,41 @@ AddJob(AppState* appState, const char* path) {
         CopyMemory(base, j->input, baseLen);
         base[baseLen] = '\0';
 
-        snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
+        if (appState->useDefaultOutputFolder) {
+            ASSERT(appState->defaultOutputFolder[0] != '\0');
+            const char* lastSlash = nullptr;
+            for (const char* scan = j->input; *scan; ++scan) {
+                if (*scan == PATH_SEP) {
+                    lastSlash = scan + 1;
+                }
+            }
+
+            if (lastSlash) {
+                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed%s",
+                         appState->defaultOutputFolder, lastSlash, lastDot);
+            } else {
+                ASSERT(false);
+            }
+        } else {
+            snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
+        }
     }
+}
+
+static void
+AddJob(AppState* appState, const char* path) {
+    if (appState->jobCount >= MAX_JOBS) {
+        DEBUG_PRINT("Jobs full!\n");
+        return;
+    }
+
+    UIJob* j = &appState->jobs[appState->jobCount];
+    *j = {};
+
+    j->status = JobStatus::QUEUED;
+    j->targetSizeMb = appState->defaultTargetSize;
+
+    ConstructPathsForJob(appState, j, path);
 
     WIN32_FILE_ATTRIBUTE_DATA fileInfo;
     if (GetFileAttributesExA(j->input, GetFileExInfoStandard, &fileInfo)) {
@@ -231,7 +274,8 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
         return;
     }
 
-    // Will hit this if we start the drag before compression starts and then drop when compressing
+    // Will hit this if we start the drag before compression starts and then drop when
+    // gsqcompressing
     //ASSERT(from > highestRunningIndex && to > highestRunningIndex);
     if (from <= highestRunningIndex || to <= highestRunningIndex) {
         return;
@@ -795,7 +839,7 @@ OpenInExplorer(HWND hWnd, const char* path) {
 }
 
 static void
-PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
+PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     char buffer[MAX_PATH_COUNT] = {};
 
     OPENFILENAMEA ofn = {};
@@ -828,7 +872,7 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         DEBUG_PRINTF("Picked new output path: %s\n", outPath);
     } else {
         DWORD err = CommDlgExtendedError();
-        DEBUG_PRINTF("CommDlgExtendedError in PickOutputPath: %u\n", err);
+        DEBUG_PRINTF("CommDlgExtendedError in PickOutputFile: %u\n", err);
 
         if (err == FNERR_BUFFERTOOSMALL) {
             // TODO: show errors for user here also
@@ -839,6 +883,30 @@ PickOutputPath(HINSTANCE hInstance, HWND hWnd, char* outPath) {
         } else {
             DEBUG_PRINT("Cancelled pick output path dialog!\n");
         }
+    }
+}
+
+static void
+PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
+    BROWSEINFOA bi = {};
+    bi.hwndOwner = hWnd;
+    bi.lpszTitle = "Select output folder";
+    //OleInitialize();
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
+
+    LPITEMIDLIST result = SHBrowseForFolderA(&bi);
+    if (result) {
+        char buffer[MAX_PATH_COUNT] = {};
+        if (SHGetPathFromIDListA(result, buffer)) {
+            CopyMemory(appState->defaultOutputFolder, buffer, MAX_PATH_COUNT);
+            // TODO: Any cases where this is set to false even?
+            appState->useDefaultOutputFolder = true;
+            DEBUG_PRINTF("Picked new default output path: %s\n", appState->defaultOutputFolder);
+        } else {
+            DEBUG_PRINT("Couldn't get selected default folder path!\n");
+        }
+    } else {
+        DEBUG_PRINT("Cancelled pick default output folder dialog!\n");
     }
 }
 
@@ -1062,6 +1130,17 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::InputFloat("##mb_input_default", defaultTargetSize, 0.0f, 0.0f, "%.2f MB");
     *defaultTargetSize = ClampF32(*defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
 
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, 10.0f);
+
+    ImGui::Text("%s", appState->defaultOutputFolder);
+
+    ImGui::SameLine();
+    if (ImGui::Button("Pick default output path")) {
+        PickDefaultOutputFolder(hWnd, appState);
+    }
+
     for (i32 i = 0; i < ARRAY_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];
         // Default value which is filled if the user supplied less than TARGET_SIZES_COUNT
@@ -1201,7 +1280,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             }
 
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                PickOutputPath(hInstance, hWnd, job->output);
+                PickOutputFile(hInstance, hWnd, job->output);
                 // This is done to reset broken hover state after the dialog closes
                 ImGui::GetIO().ClearInputMouse();
             } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
@@ -2107,6 +2186,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         // fine along with a small alpha value like 0.02f, so we really don't even need the clamp
         // IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls like 1 second
         // Currently the fps gets skewed for 1 frame but that's it really
+
         //f32 clampedFrameWorkMs =
         //    ClampF32(frameWorkMs, 0.0f, (1.0f / 60.0f) * 1000.0f); // Clamp to max of 60 fps
 

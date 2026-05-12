@@ -6,19 +6,21 @@ The end goal for this project is to act as a native desktop application replacem
 compression website I have used https://www.freeconvert.com/video-compressor This way we can take
 advantage of the precious hardware each one of us has!
 
-## Requirements
+- The program depends on ffmpeg and ffprobe.
 
 TODO: redistribute the binaries with a release build, or offer both with and without?
+
+## Building locally
 
 ### FFMpeg
 
 Version used: 8.1
 
-- The program depends on ffmpeg and ffprobe. The easiest way to get these on Windows: from the git
-master or release builds section of https://www.gyan.dev/ffmpeg/builds/ Download a full_build of any
-kind, such as ffmpeg-2026-04-26-git-4867d251ad-full_build.7z. Make a folder next to compress.exe
-named "vendor" and inside that named "ffmpeg". Then copy all the contents of the downloaded zip
-"bin" folder (10 items) to "vendor/ffmpeg"
+The easiest way to get FFmpeg on Windows: from the git master or release builds section of
+https://www.gyan.dev/ffmpeg/builds/ Download a full_build of any kind, such as
+ffmpeg-2026-04-26-git-4867d251ad-full_build.7z. Make a folder next to compress.exe named "vendor"
+and inside that named "ffmpeg". Then copy all the contents of the downloaded zip "bin" folder (10
+items) to "vendor/ffmpeg"
 
 ### ImGui
 
@@ -26,8 +28,6 @@ Version used: 1.92.7-docking
 
 - Download from: https://github.com/ocornut/imgui/tags and drop into "vendor/imgui". Make sure the
   folder names are correct, so remove the version
-
-## Build
 
 ### Windows
 

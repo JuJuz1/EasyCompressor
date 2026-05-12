@@ -44,7 +44,7 @@ if !config! == debug (
     set flags=!flags! /MTd /Od /Zi
 ) else if !config! == release (
     rem /MT /O2
-    set flags=!flags! /MD /Od /Zi
+    set flags=!flags! /MD /Od
 )
 
 echo !defines!
