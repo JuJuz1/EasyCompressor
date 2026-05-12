@@ -547,8 +547,8 @@ RunCompress(AppState* appState, UIJob* job) {
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
                  // "-pass 1 -an -f null %s",
-                 "-pass 1 -passlogfile %s -an -f null %s",
-                 appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV, NULL_DEV);
+                 "-pass 1 -passlogfile \"%s\\easycompressor_ffmpeg\" -an -f null %s",
+                 appState->ffmpegPath, job->input, codec, videoKbps, appState->tempDir, NULL_DEV);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         STARTUPINFOA si = {};
@@ -653,11 +653,11 @@ RunCompress(AppState* appState, UIJob* job) {
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
                  // "-pass 2 "
-                 "-pass 2 -passlogfile %s "
+                 "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
                  "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
                  appState->ffmpegPath, job->input, codec,
                  videoKbps, //, passLog,
-                 NULL_DEV, audioKbps, job->output);
+                 appState->tempDir, audioKbps, job->output);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         STARTUPINFOA si = {};
@@ -2029,7 +2029,33 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     GetExeDirectory(&appState);
     DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
-    //GetFFMpegPath(&pathInfo);
+    //GetFFMpegPath(&pathInfo); TODO?
+
+    // TODO: The following path processing code is maybe a bit too defensive, we could just exit the
+    // program if we can't do some of these instead of always having some fallback option, have to
+    // review more carefully sometime
+
+    /// Temp dir
+
+    DWORD result = GetTempPathA(MAX_PATH_COUNT, appState.tempDir);
+    if (!result) {
+        DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
+        // Use exe dir as working dir...
+        snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+    }
+    // No space!
+    else if (result >= sizeof(appState.tempDir)) {
+        DEBUG_PRINT("No space for temp dir, using exe dir...\n");
+        snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+    } else {
+        // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
+        ASSERT(result > 0 && result < sizeof(appState.tempDir));
+        if (result > 0 && result < sizeof(appState.tempDir)) {
+            appState.tempDir[result - 1] = '\0';
+        } else {
+            snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+        }
+    }
 
     /// Default output folder
 

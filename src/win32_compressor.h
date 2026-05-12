@@ -78,9 +78,12 @@ struct AppState {
     // All UI state with ImGui
     UIState uiState;
 
-    char defaultOutputFolder[MAX_PATH_COUNT];
+    char defaultOutputFolder[MAX_PATH_COUNT]; // User/Documents
     bool32 useDefaultOutputFolder;
-    char exeDir[MAX_PATH_COUNT];     // Absolute path to the exe directory
+
+    char exeDir[MAX_PATH_COUNT];  // Absolute path to the exe directory
+    char tempDir[MAX_PATH_COUNT]; // Temp dir for ffmpeg logs
+
+    char appData[MAX_PATH_COUNT];    // AppData/Local, where the config and imgui.ini are stored
     char ffmpegPath[MAX_PATH_COUNT]; // Relative to working directory OR TODO: path?
-    char appData[MAX_PATH_COUNT];    // AppData/Roaming, where the config and imgui.ini are stored
 };
