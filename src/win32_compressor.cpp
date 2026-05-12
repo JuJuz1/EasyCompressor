@@ -152,6 +152,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
 
     // TODO: maybe just use a dedicated output folder and use the input name as output
     // that way we wouldn't have to do this string processing nonsense
+    // Also should probably use the Windows API for path processing as we don't handle UNC paths or
+    // device paths at all here!
 
     const char* lastDot = nullptr;
     for (const char* scan = j->input; *scan; ++scan) {
@@ -544,9 +546,9 @@ RunCompress(AppState* appState, UIJob* job) {
         snprintf(cmd, sizeof(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
-                 "-pass 1 -an -f null %s",
-                 //"-pass 1 -passlogfile %s -an -f null %s",
-                 appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV);
+                 // "-pass 1 -an -f null %s",
+                 "-pass 1 -passlogfile %s -an -f null %s",
+                 appState->ffmpegPath, job->input, codec, videoKbps, NULL_DEV, NULL_DEV);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         STARTUPINFOA si = {};
@@ -650,12 +652,12 @@ RunCompress(AppState* appState, UIJob* job) {
         snprintf(cmd, sizeof(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
-                 "-pass 2 "
-                 //"-pass 2 -passlogfile %s "
+                 // "-pass 2 "
+                 "-pass 2 -passlogfile %s "
                  "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
-                 appState->ffmpegPath, job->input, codec, videoKbps //, passLog
-                 ,
-                 audioKbps, job->output);
+                 appState->ffmpegPath, job->input, codec,
+                 videoKbps, //, passLog,
+                 NULL_DEV, audioKbps, job->output);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         STARTUPINFOA si = {};
@@ -1084,7 +1086,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     ImGui::SameLine();
     ImGui::BeginDisabled(compressing || noJobs);
-    if (ImGui::Button("Apply to all files")) {
+    if (ImGui::Button("Apply new size to all files")) {
         SetTargetSizeForAll(appState, *defaultTargetSize);
     }
 
@@ -1134,12 +1136,19 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, 10.0f);
 
-    ImGui::Text("%s", appState->defaultOutputFolder);
-
-    ImGui::SameLine();
-    if (ImGui::Button("Pick default output path")) {
+    if (ImGui::Button("Pick a default output folder")) {
         PickDefaultOutputFolder(hWnd, appState);
     }
+
+    ImGui::SameLine();
+    if (appState->defaultOutputFolder[0] == '\0') {
+        ImGui::TextUnformatted("No default folder selected");
+    } else {
+        ImGui::Text("%s", appState->defaultOutputFolder);
+    }
+
+    ImGui::SameLine();
+    ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useDefaultOutputFolder));
 
     for (i32 i = 0; i < ARRAY_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];
@@ -1992,22 +2001,50 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
     //GetFFMpegPath(&pathInfo);
 
-    /// Config file
+    /// Default output folder
 
-    char appData[MAX_PATH_COUNT];
-    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
-        DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
+    char outputFolder[MAX_PATH_COUNT];
+    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
+        DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
         // Use exe dir as working dir...
-        snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
+        snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s",
+                 appState.exeDir);
     } else {
-        DEBUG_PRINTF("Found appdata %s\n", appData);
-        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, name);
+        DEBUG_PRINTF("Found documents %s\n", outputFolder);
+        snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s\\%s",
+                 outputFolder, name);
         // It's okay to fail silently
-        BOOL created = CreateDirectoryA(appState.appData, nullptr);
+        BOOL created = CreateDirectoryA(appState.defaultOutputFolder, nullptr);
         if (!created) {
             DWORD err = GetLastError();
             if (err != ERROR_ALREADY_EXISTS) {
                 // This shouldn't ever happen though
+                DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
+                             "there. Using exe dir...\n");
+                snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s",
+                         appState.exeDir);
+                ASSERT(false);
+            }
+        }
+    }
+
+    // I guess this for now as the default
+    appState.useDefaultOutputFolder = true;
+
+    /// Config file
+    // TODO: exact same code as above
+
+    char appData[MAX_PATH_COUNT];
+    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
+        DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
+        snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
+    } else {
+        DEBUG_PRINTF("Found appdata %s\n", appData);
+        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, name);
+        BOOL created = CreateDirectoryA(appState.appData, nullptr);
+        if (!created) {
+            DWORD err = GetLastError();
+            if (err != ERROR_ALREADY_EXISTS) {
                 DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                              "there. Using exe dir...\n");
                 snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
