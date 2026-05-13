@@ -28,6 +28,8 @@ enum class Codec : u8 {
 struct UIJob {
     char input[MAX_PATH_COUNT];
     char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
+    //bool32 hasValidFileExtension;     // Some file extension is required by ffmpeg pass 2
+    // We pass "-f mp4" as default if this is false
 
     f32 inputFileSize;
     f32 durationSeconds; // Probed from the video before compression (2 passes)

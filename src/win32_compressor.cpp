@@ -53,6 +53,8 @@
 #include "win32_compressor.h"
 
 /// Printing
+// TODO: make these also go into a log file for easier debugging for different/versions of the app
+// Also issues from users to include log files so we can see what happened!!!
 
 #if COMPRESSOR_DEBUG
 
@@ -146,6 +148,17 @@ CodecText_(Codec s) {
     return "";
 }
 
+//static bool32
+//IsValidExtension(const char* check) {
+//    if (!check) {
+//        return false;
+//    }
+
+//    bool32 valid = false;
+
+//    return valid;
+//}
+
 static void
 ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
     snprintf(j->input, sizeof(j->input), "%s", path);
@@ -185,11 +198,21 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
                 // even if it can be disabled or not!
                 ASSERT(false);
             }
-
         } else {
             snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
         }
     } else {
+        // IMPORTANT:
+        // TODO: validate file extension !!!OTHERWISE WE MIGHT PASS GARBAGE TO FFMPEG...
+        // pass 2 seems to fail with random extensions when I tested, like .kkhh
+        // On a further note, we should probably not validate the extension but rather based on the
+        // codec choose the output container format
+
+        // Use -f mp4 for now before we figure this out fully
+        //const char* check = lastDot + 1;
+        //bool32 valid = IsValidExtension(check);
+        //j->hasValidFileExtension = valid;
+
         i32 extensionLen = StrLength(lastDot);
         i32 inputLen = StrLength(j->input);
         i32 baseLen = inputLen - extensionLen; // Without extension
@@ -201,7 +224,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
         if (appState->useDefaultOutputFolder) {
             ASSERT(appState->defaultOutputFolder[0] != '\0');
             const char* lastSlash = nullptr;
-            for (const char* scan = j->input; *scan; ++scan) {
+            for (const char* scan = base; *scan; ++scan) {
                 if (*scan == PATH_SEP) {
                     lastSlash = scan + 1;
                 }
@@ -521,7 +544,7 @@ RunCompress(AppState* appState, UIJob* job) {
         progress=continue
     */
 
-    char cmd[(MAX_PATH_COUNT * 2) + 128];
+    char cmd[(MAX_PATH_COUNT * 2) + 256];
 
     /// Pass 1
 
@@ -545,7 +568,9 @@ RunCompress(AppState* appState, UIJob* job) {
 
         snprintf(cmd, sizeof(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
+                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // -f mp4, this throws error...
+                                                                // But it works fine without file
+                                                                // extension also
                  // "-pass 1 -an -f null %s",
                  "-pass 1 -passlogfile \"%s\\easycompressor_ffmpeg\" -an -f null %s",
                  appState->ffmpegPath, job->input, codec, videoKbps, appState->tempDir, NULL_DEV);
@@ -618,9 +643,10 @@ RunCompress(AppState* appState, UIJob* job) {
 
         if (exitCode != 0) {
             if (!cancelled) {
+                _InterlockedExchange(&job->progressPct, 0);
                 DEBUG_PRINT(buffer);
                 job->status = JobStatus::ERROR;
-                DEBUG_PRINT("Exit code != 0 pass 1\n");
+                DEBUG_PRINTF("Exit code != 0 pass 1: %d\n", exitCode);
             }
 
             return;
@@ -649,15 +675,28 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
+        //if (!job->hasValidFileExtension) {
         snprintf(cmd, sizeof(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk "
+                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
                  // "-pass 2 "
                  "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
                  "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
                  appState->ffmpegPath, job->input, codec,
                  videoKbps, //, passLog,
                  appState->tempDir, audioKbps, job->output);
+        //} else {
+        //    snprintf(cmd, sizeof(cmd),
+        //             "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+        //             "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // Format is validated
+        //             // "-pass 2 "
+        //             "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
+        //             "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
+        //             appState->ffmpegPath, job->input, codec,
+        //             videoKbps, //, passLog,
+        //             appState->tempDir, audioKbps, job->output);
+        //}
+
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         STARTUPINFOA si = {};
@@ -726,9 +765,10 @@ RunCompress(AppState* appState, UIJob* job) {
 
         if (exitCode != 0) {
             if (!cancelled) {
+                _InterlockedExchange(&job->progressPct, 0);
                 DEBUG_PRINT(buffer);
                 job->status = JobStatus::ERROR;
-                DEBUG_PRINT("Exit code != 0 pass 2\n");
+                DEBUG_PRINTF("Exit code != 0 pass 2: %d\n", exitCode);
             }
 
             return;
@@ -1078,7 +1118,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     /// Default target size
 
-    ImGui::Text("Default target size:");
+    ImGui::TextUnformatted("Default target size:");
     f32* defaultTargetSize = &appState->defaultTargetSize;
     ImGui::SetNextItemWidth(sliderWidth);
     ImGui::SliderFloat("##mb_slider_default", defaultTargetSize, MIN_TARGET_SIZE, MAX_TARGET_SIZE,
@@ -1096,7 +1136,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, 10.0f);
 
-    ImGui::Text("Codec used:");
+    ImGui::TextUnformatted("Codec used:");
     ImGui::SameLine();
     ImGui::BeginDisabled(compressing);
 
@@ -1109,7 +1149,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::TextUnformatted("Recommended default codec\n");
+        ImGui::TextUnformatted("Recommended default codec");
         ImGui::EndTooltip();
     }
 
@@ -1312,7 +1352,12 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted("Click to change output directory\n"
+                ImGui::Text(job->input);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
+                ImGui::Text(job->output);
+                ImGui::PopStyleColor();
+
+                ImGui::TextUnformatted("Click to change output folder\n"
                                        "Middle click to open input in explorer\n"
                                        "Right click for more options");
                 ImGui::EndTooltip();
@@ -2270,14 +2315,16 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         // NOTE: in a real system one would not probably do this as this is purely to account
         // for the blocking nature of the file dialogs inside DrawUI I guess this stems from the
         // fact that we are using ImGui and not storing the state it produces anywhere when
-        // clicking UI elements. IMPORTANT: If we were to store the state and only after drawing
+        // clicking UI elements
+        // IMPORTANT: If we were to store the state and only after drawing
         // the UI, no matter the blocking nature, we would catch true frame drops and such
 
         // This is also assuming we correctly scope our profiling timings and not just blindly
         // do frameEnd - frameStart, as there might have been blocking functions along the way
         // But for now these blocking functions only disturb that frame's timing so it's
         // probably fine along with a small alpha value like 0.02f, so we really don't even need
-        // the clamp IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls
+        // the clamp
+        // IMPORTANT: Instead probably a wiser choice is to just ignore blatant stalls
         // like 1 second. Currently the fps gets skewed for 1 frame but that's it really
 
         //f32 clampedFrameWorkMs =

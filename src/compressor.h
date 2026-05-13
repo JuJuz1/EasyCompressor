@@ -46,3 +46,19 @@ StrLength(const char* str) {
 
     return len;
 }
+
+//static bool32
+//StrEqual(const char* a, const char* b) {
+//    ASSERT(a && b);
+
+//    while (*a && *b) {
+//        if (*a != *b) {
+//            return false;
+//        }
+
+//        ++a;
+//        ++b;
+//    }
+
+//    return (*a == '\0') && (*b == '\0');
+//}
