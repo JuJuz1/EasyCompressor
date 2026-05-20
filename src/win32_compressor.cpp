@@ -929,6 +929,60 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     }
 }
 
+/**
+ * path is guaranteed to be valid here
+ */
+static void
+SaveOutputPathToConfig(AppState* appState, const char* path) {
+    char configFilePath[MAX_PATH_COUNT + 18];
+    snprintf(configFilePath, sizeof(configFilePath), "%s\\easycompressor.cfg", appState->appData);
+    HANDLE file = CreateFileA(configFilePath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DEBUG_PRINT("Failed to open config for writing!\n");
+        return;
+    }
+
+    char buff[MAX_PATH_COUNT + 512];
+
+    DWORD read = 0;
+    ReadFile(file, buff, sizeof(buff), &read, nullptr);
+    CloseHandle(file);
+    buff[read] = '\0';
+
+    HANDLE out = CreateFileA(configFilePath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    const char* p = buff;
+    DWORD written = 0;
+
+    while (*p) {
+        if (p[0] == '[' && p[1] == 'O' && p[2] == 'u' && p[3] == 't' && p[4] == 'p' &&
+            p[5] == 'u' && p[6] == 't' && p[7] == 'P' && p[8] == 'a' && p[9] == 't' &&
+            p[10] == 'h' && p[11] == ']') {
+            WriteFile(out, "[OutputPath]\n", 13, &written, nullptr);
+            // Skip to next line
+            p += 12;
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            if (*p == '\n') {
+                ++p;
+            }
+
+            WriteFile(out, path, StrLength(path), &written, nullptr);
+            WriteFile(out, "\n", 1, &written, nullptr);
+            // We know the OutputPath section is the last so we can break
+            break;
+        }
+
+        WriteFile(out, p, 1, &written, nullptr);
+        ++p;
+    }
+
+    CloseHandle(out);
+}
+
 static void
 PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
     BROWSEINFOA bi = {};
@@ -942,9 +996,10 @@ PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
         char buffer[MAX_PATH_COUNT] = {};
         if (SHGetPathFromIDListA(result, buffer)) {
             CopyMemory(appState->defaultOutputFolder, buffer, MAX_PATH_COUNT);
-            // TODO: Any cases where this is set to false even?
+            // TODO: Any cases where this is even set to false?
             appState->useDefaultOutputFolder = true;
             DEBUG_PRINTF("Picked new default output path: %s\n", appState->defaultOutputFolder);
+            SaveOutputPathToConfig(appState, buffer);
         } else {
             DEBUG_PRINT("Couldn't get selected default folder path!\n");
         }
@@ -1874,6 +1929,10 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
     while (*p) {
         while (*p == ' ' || *p == '\r' || *p == '\n') {
             ++p;
+        }
+
+        if (!*p) {
+            break;
         }
 
         // Comments
