@@ -36,7 +36,7 @@ struct UIJob {
 
     f32 targetSizeMb;
     volatile long status;      // JobStatus
-    volatile long progressPct; // 0..100 (compression progress only)
+    volatile long progressPct; // 0..100 (compression progress only as probing is fast)
     //Codec codec;
     //Preset preset; different quality vs a target size, don't think this is needed
 

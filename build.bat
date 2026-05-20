@@ -57,7 +57,7 @@ rem set linkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:
 set linkerFlags=/SUBSYSTEM:WINDOWS
 
 rem libraries
-set win32Libraries=Kernel32.lib User32.lib Shell32.lib Comdlg32.lib
+set win32Libraries=Kernel32.lib User32.lib Shell32.lib Comdlg32.lib Shlwapi.lib
 set dxLibraries=d3d11.lib dxgi.lib d3dcompiler.lib
 
 set buildFailed=0

@@ -20,6 +20,7 @@
 #    include <cderr.h>       // CommDlg errors
 #    include <commdlg.h>     // OFN, GetSaveFileNameA
 #    include <shlobj_core.h> // SHGetFolderPathA, SHBrowseForFolderA
+#    include <shlwapi.h>     // PathFileExistsA
 
 // Windows...
 #    ifdef ERROR
@@ -1817,7 +1818,9 @@ CreateDefaultConfigFile(const char* path) {
         "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
         "range are clamped\n\n"
         "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n\n"
-        "[Codecs]\nh264 !\nh265\n";
+        "[Codecs]\nh264 !\nh265\n\n"
+        "# Has to be an absolute path\n"
+        "[OutputPath]\n";
 
     DWORD written = 0;
     // Don't write null terminator
@@ -1833,8 +1836,11 @@ CreateDefaultConfigFile(const char* path) {
     return true;
 }
 
+/**
+ * Return value depends solely on the target sizes!
+ */
 static bool32
-LoadConfigFile(AppState* appState, const char* path) {
+LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
     HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
@@ -1842,7 +1848,7 @@ LoadConfigFile(AppState* appState, const char* path) {
         return false;
     }
 
-    char buf[512];
+    char buf[512 + MAX_PATH_COUNT];
     DWORD bytesRead = 0;
 
     if (!ReadFile(file, buf, sizeof(buf), &bytesRead, nullptr) || bytesRead == 0) {
@@ -1856,6 +1862,7 @@ LoadConfigFile(AppState* appState, const char* path) {
     i32 sizesParsed = 0;
     bool32 inSizes = false;
     bool32 inCodecs = false;
+    bool32 inOutputPath = false;
     bool32 foundDefaultForSize = false;
     bool32 foundDefaultForCodec = false;
     const char* p = buf;
@@ -1885,6 +1892,10 @@ LoadConfigFile(AppState* appState, const char* path) {
 
             inCodecs = (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
                         p[6] == 's' && p[7] == ']');
+
+            inOutputPath = (p[1] == 'O' && p[2] == 'u' && p[3] == 't' && p[4] == 'p' &&
+                            p[5] == 'u' && p[6] == 't' && p[7] == 'P' && p[8] == 'a' &&
+                            p[9] == 't' && p[10] == 'h' && p[11] == ']');
 
             while (*p && *p != '\n') {
                 ++p;
@@ -1967,6 +1978,55 @@ LoadConfigFile(AppState* appState, const char* path) {
                     appState->defaultCodec = codec;
                 }
             }
+        } else if (inOutputPath) {
+            const char* start = p;
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            const char* end = p;
+            const char* t = start;
+            while (t < end && *t == ' ') {
+                ++t;
+            }
+
+            char outputPath[MAX_PATH_COUNT];
+            i32 len = static_cast<i32>(end - start);
+
+            if (len > 0 && len < MAX_PATH_COUNT) {
+                CopyMemory(outputPath, start, len);
+                outputPath[len] = '\0';
+
+                if (PathIsRelativeA(outputPath)) {
+                    DEBUG_PRINTF("Tried to use relative path %s\n", outputPath);
+                } else {
+                    DWORD attrs = GetFileAttributesA(outputPath);
+                    bool32 valid = false;
+
+                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                        valid = true;
+                    } else {
+                        if (CreateDirectoryA(outputPath, nullptr)) {
+                            valid = true;
+                        } else {
+                            DWORD err = GetLastError();
+                            if (err == ERROR_ALREADY_EXISTS) {
+                                valid = true;
+                            }
+                        }
+                    }
+
+                    if (valid) {
+                        DEBUG_PRINTF("Using output path: %s\n", outputPath);
+                        snprintf(appState->defaultOutputFolder,
+                                 sizeof(appState->defaultOutputFolder), "%s", outputPath);
+                    } else {
+                        DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
+                    }
+                }
+            } else {
+                DEBUG_PRINTF("Invalid output path length: %d\n", len);
+            }
         }
 
         while (*p && *p != '\n') {
@@ -1975,6 +2035,38 @@ LoadConfigFile(AppState* appState, const char* path) {
     }
 
     CloseHandle(file);
+
+    // Having no output path is NOT considered a failure
+    // We just use the default User/Documents/EasyCompressor
+    if (appState->defaultOutputFolder[0] == '\0') {
+        char outputFolder[MAX_PATH_COUNT];
+        if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
+            DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
+            // Use exe dir as working dir...
+            snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder), "%s",
+                     appState->exeDir);
+        } else {
+            DEBUG_PRINTF("Found documents %s\n", outputFolder);
+            snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder),
+                     "%s\\EasyCompressor", outputFolder);
+            // It's okay to fail silently
+            BOOL created = CreateDirectoryA(appState->defaultOutputFolder, nullptr);
+            if (!created) {
+                DWORD err = GetLastError();
+                if (err != ERROR_ALREADY_EXISTS) {
+                    // This shouldn't ever happen though
+                    ASSERT(false);
+                    DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
+                                 "there. Using exe dir...\n");
+                    snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder),
+                             "%s", appState->exeDir);
+                }
+            }
+        }
+    }
+
+    // I guess this for now as the default
+    appState->useDefaultOutputFolder = true;
 
     // Having no codecs is NOT considered a failure
     // Having no default codec is also NOT considered a failure
@@ -2102,36 +2194,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         }
     }
 
-    /// Default output folder
-
-    char outputFolder[MAX_PATH_COUNT];
-    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
-        DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
-        // Use exe dir as working dir...
-        snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s",
-                 appState.exeDir);
-    } else {
-        DEBUG_PRINTF("Found documents %s\n", outputFolder);
-        snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s\\%s",
-                 outputFolder, name);
-        // It's okay to fail silently
-        BOOL created = CreateDirectoryA(appState.defaultOutputFolder, nullptr);
-        if (!created) {
-            DWORD err = GetLastError();
-            if (err != ERROR_ALREADY_EXISTS) {
-                // This shouldn't ever happen though
-                DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
-                             "there. Using exe dir...\n");
-                snprintf(appState.defaultOutputFolder, sizeof(appState.defaultOutputFolder), "%s",
-                         appState.exeDir);
-                ASSERT(false);
-            }
-        }
-    }
-
-    // I guess this for now as the default
-    appState.useDefaultOutputFolder = true;
-
     /// Config file
     // TODO: exact same code as above
 
@@ -2157,12 +2219,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     char configPath[MAX_PATH_COUNT];
     snprintf(configPath, sizeof(configPath), "%s\\easycompressor.cfg", appState.appData);
 
-    bool32 loaded = LoadConfigFile(&appState, configPath);
+    bool32 loaded = LoadConfigFile(hWnd, &appState, configPath);
     if (!loaded) {
         bool32 created = CreateDefaultConfigFile(configPath);
         if (created) {
             DEBUG_PRINT("Loading just created config file...\n");
-            LoadConfigFile(&appState, configPath);
+            LoadConfigFile(hWnd, &appState, configPath);
         } else {
             DEBUG_PRINT("Fallback to using default target sizes...\n");
             f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
