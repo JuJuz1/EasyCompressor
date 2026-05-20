@@ -996,7 +996,9 @@ PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
         char buffer[MAX_PATH_COUNT] = {};
         if (SHGetPathFromIDListA(result, buffer)) {
             CopyMemory(appState->defaultOutputFolder, buffer, MAX_PATH_COUNT);
-            // TODO: Any cases where this is even set to false?
+            // This overwrites the selected value always
+            // I think it's the most expected approach as if the user selects a new output path it
+            // should be automatically be activated
             appState->useDefaultOutputFolder = true;
             DEBUG_PRINTF("Picked new default output path: %s\n", appState->defaultOutputFolder);
             SaveOutputPathToConfig(appState, buffer);
