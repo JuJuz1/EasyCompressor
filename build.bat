@@ -7,7 +7,9 @@ pushd build
 set argConfig=%1
 set config=debug
 
-if "!argConfig!" == "release" (
+if "!argConfig!" == "rel" (
+    set config=release
+) else if "!argConfig!" == "release" (
     set config=release
 )
 

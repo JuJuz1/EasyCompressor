@@ -53,6 +53,19 @@
 
 #include "win32_compressor.h"
 
+#define COMPRESSOR_NAME "EasyCompressor"
+
+/// Globals
+
+// Used inside ShowNotification
+static HWND gHwnd;
+
+// Used only inside WndProc
+// TODO: there might be a way to pass appState via the HWND
+static AppState* gAppState;
+// Frequency
+static i64 gPerfFreq;
+
 /// Printing
 // TODO: make these also go into a log file for easier debugging for different/versions of the app
 // Also issues from users to include log files so we can see what happened!!!
@@ -95,8 +108,38 @@ PRINTF(const char* fmt, ...) {
     OutputDebugStringA(buf);
 }
 
-// Frequency
-static i64 gPerfFreq;
+static void
+ShowNotification(const char* msg, const char* title, DWORD flags) {
+    ASSERT(gHwnd);
+
+    NOTIFYICONDATAA data = {};
+    data.cbSize = sizeof(data);
+    data.hWnd = gHwnd;
+    data.uFlags = NIF_INFO | NIF_TIP;
+    data.dwInfoFlags = flags; // NIIF_INFO, NIIF_WARNING, NIIF_ERROR
+
+    snprintf(data.szTip, sizeof(data.szTip), COMPRESSOR_NAME);
+    snprintf(data.szInfo, sizeof(data.szInfo), "%s", msg);
+    snprintf(data.szInfoTitle, sizeof(data.szInfoTitle), "%s", title);
+    Shell_NotifyIconA(NIM_MODIFY, &data);
+}
+
+/**
+ * Registers a notification
+ */
+static void
+AddTrayIcon(HWND hWnd, HICON hIcon) {
+    NOTIFYICONDATAA data = {};
+    data.cbSize = sizeof(data);
+    data.hWnd = hWnd;
+    data.uFlags = //NIF_MESSAGE |
+        NIF_ICON | NIF_TIP;
+    //data.uCallbackMessage = ?; Can be used inside WndProc
+    data.hIcon = hIcon;
+
+    snprintf(data.szTip, sizeof(data.szTip), COMPRESSOR_NAME);
+    Shell_NotifyIconA(NIM_ADD, &data);
+}
 
 static LARGE_INTEGER
 GetWallClock() {
@@ -804,6 +847,7 @@ WorkerThread(void* param) {
         }
 
         if (_InterlockedCompareExchange(&appState->compressing, 0, 0)) {
+            bool32 cancelled = false;
             jobCount = static_cast<i32>(_InterlockedCompareExchange(&appState->jobCount, 0, 0));
             for (i32 i = 0; i < jobCount; ++i) {
                 UIJob* job = &appState->jobs[i];
@@ -825,12 +869,18 @@ WorkerThread(void* param) {
                     // Sets to 0 automatically if was 1
                     if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 1)) {
                         DEBUG_PRINT("Cancelled compressing...\n");
+                        cancelled = true;
                         break;
                     }
                 }
             }
 
             _InterlockedExchange(&appState->compressing, 0);
+            if (!cancelled) {
+                char buff[64];
+                snprintf(buff, sizeof(buff), "%d video(s)", jobCount);
+                ShowNotification(buff, "Compression finished", NIIF_INFO);
+            }
         }
 
         Sleep(50);
@@ -1125,7 +1175,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("EasyCompressor", nullptr,
+    ImGui::Begin(COMPRESSOR_NAME, nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_MenuBar);
 
@@ -1670,7 +1720,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse)) {
-        ImGui::TextUnformatted("EasyCompressor");
+        ImGui::TextUnformatted(COMPRESSOR_NAME);
         ImGui::Separator();
 
         ImGui::TextUnformatted("Built with");
@@ -1784,10 +1834,6 @@ CleanupDeviceD3D() {
         gDevice = nullptr;
     }
 }
-
-// Used only inside WndProc
-// TODO: there might be a way to pass appState via the HWND
-static AppState* gAppState;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam,
                                                              LPARAM lParam);
@@ -2163,9 +2209,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     f32 mainScale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    const char* name = "EasyCompressor";
-    char windowName[29];
-    snprintf(windowName, sizeof(windowName), name);
+    // | DEV | DEBUG + null term
+    char windowName[sizeof(COMPRESSOR_NAME) + 6 + 8 + 1];
+    snprintf(windowName, sizeof(windowName), COMPRESSOR_NAME);
 #if COMPRESSOR_DEV
     snprintf(windowName, sizeof(windowName), "%s | DEV", windowName);
 #endif
@@ -2199,9 +2245,17 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     ////////////////////////////////////////////////////////////
 
+    gHwnd = hWnd;
     DragAcceptFiles(hWnd, TRUE); // enable WM_DROPFILES
     ShowWindow(hWnd, SW_SHOWDEFAULT);
     UpdateWindow(hWnd);
+
+    /// Notifications
+    // TODO: custom icon?
+    //gIcon = LoadIconA(hInstance, MAKEINTRESOURCEA(1));
+    HICON hIcon = LoadIconA(nullptr, IDI_APPLICATION);
+    ASSERT(hIcon);
+    AddTrayIcon(hWnd, hIcon);
 
     /// ImGui
 
@@ -2264,7 +2318,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
     } else {
         DEBUG_PRINTF("Found appdata %s\n", appData);
-        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, name);
+        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, COMPRESSOR_NAME);
         BOOL created = CreateDirectoryA(appState.appData, nullptr);
         if (!created) {
             DWORD err = GetLastError();
