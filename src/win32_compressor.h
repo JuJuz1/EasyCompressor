@@ -49,7 +49,7 @@ struct UIJob {
 
 #define OPEN_FLASH_TIMER_START 5.0f
 
-#define MAX_JOBS 25
+#define MAX_JOBS 50
 
 // All in MB
 #define MIN_TARGET_SIZE 0.5f

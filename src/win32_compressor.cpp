@@ -1914,7 +1914,9 @@ CreateDefaultConfigFile(const char* path) {
     }
 
     char content[] =
-        "# IMPORTANT: don't change anything inside this file except the sizes!\n\n"
+        "# IMPORTANT: H264 and H265 are the only codecs currently supported\n"
+        "# Use the app to set the default output path, it's much easier that way!\n\n"
+
         "# You can specify up to 5 preset sizes the app loads when it starts, only the "
         "first 5 are used\n"
         "# Append ! after a value to signal it as the default value\n"
