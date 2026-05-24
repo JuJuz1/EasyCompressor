@@ -28,8 +28,10 @@ typedef wchar_t wchar;
 // clang-tidy NOLINTBEGIN
 #if COMPRESSOR_DEBUG
 #    define ASSERT(expr) if (!(expr)) { *(static_cast<int*>(nullptr)) = 0; }
+#    define INVALID_CODE_PATH ASSERT(false) // TODO: Crashes for now
 #else
 #    define ASSERT(expr)
+#    define INVALID_CODE_PATH
 #endif
 // clang-tidy NOLINTEND
 

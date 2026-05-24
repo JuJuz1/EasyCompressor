@@ -221,17 +221,6 @@ CodecText_(Codec s) {
     return "";
 }
 
-//static bool32
-//IsValidExtension(const char* check) {
-//    if (!check) {
-//        return false;
-//    }
-
-//    bool32 valid = false;
-
-//    return valid;
-//}
-
 static void
 ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     UTF16To8(path, j->input);
@@ -240,7 +229,6 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // TODO: should probably use the Windows API for path processing as we don't handle UNC paths or
     // device paths at all here!
 
-#ifdef UNICODE
     ASSERT(appState->outputFolder[0] != '\0');
 
     // Find last path separator in input (UTF-8 safe because '\' and '/' are ASCII)
@@ -256,85 +244,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     if (lastSlash) {
         snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
     } else {
-        ASSERT(false);
+        INVALID_CODE_PATH;
     }
-
-#else
-
-    const char* lastDot = nullptr;
-    for (const char* scan = j->input; *scan; ++scan) {
-        if (*scan == '.') {
-            lastDot = scan;
-        }
-    }
-
-    // No file extension found...
-    // Don't fail, but construct a default path without the extension but with _compressed
-    if (!lastDot) {
-        DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
-        if (appState->useoutputFolder) {
-            ASSERT(appState->outputFolder[0] != '\0');
-            const char* lastSlash = nullptr;
-            for (const char* scan = j->input; *scan; ++scan) {
-                if (*scan == PATH_SEP) {
-                    lastSlash = scan + 1;
-                }
-            }
-
-            if (lastSlash) {
-                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed", appState->outputFolder,
-                         lastSlash);
-            } else {
-                // This kind of should never happen
-                // TODO: fallback to using the default input path just like when no default output
-                // folder is selected? This will change if we always require a default output folder
-                // even if it can be disabled or not!
-                ASSERT(false);
-            }
-        } else {
-            snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
-        }
-    } else {
-        // IMPORTANT:
-        // TODO: validate file extension !!!OTHERWISE WE MIGHT PASS GARBAGE TO FFMPEG...
-        // pass 2 seems to fail with random extensions when I tested, like .kkhh
-        // On a further note, we should probably not validate the extension but rather based on the
-        // codec choose the output container format
-
-        // Use -f mp4 for now before we figure this out fully
-        //const char* check = lastDot + 1;
-        //bool32 valid = IsValidExtension(check);
-        //j->hasValidFileExtension = valid;
-
-        i32 extensionLen = StrLength(lastDot);
-        i32 inputLen = StrLength(j->input);
-        i32 baseLen = inputLen - extensionLen; // Without extension
-
-        char base[MAX_PATH_COUNT];
-        CopyMemory(base, j->input, baseLen);
-        base[baseLen] = '\0';
-
-        if (appState->useoutputFolder) {
-            ASSERT(appState->outputFolder[0] != '\0');
-            const char* lastSlash = nullptr;
-            for (const char* scan = base; *scan; ++scan) {
-                if (*scan == PATH_SEP) {
-                    lastSlash = scan + 1;
-                }
-            }
-
-            if (lastSlash) {
-                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed%s",
-                         appState->outputFolder, lastSlash, lastDot);
-            } else {
-                ASSERT(false);
-            }
-        } else {
-            snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
-        }
-    }
-
-#endif
 }
 
 static void
@@ -809,7 +720,6 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        //if (!job->hasValidFileExtension) {
         snprintf(cmd, ARR_COUNT(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
@@ -819,17 +729,6 @@ RunCompress(AppState* appState, UIJob* job) {
                  appState->ffmpegPath, job->input, codec,
                  videoKbps, //, passLog,
                  appState->tempDir, audioKbps, job->output);
-        //} else {
-        //    snprintf(cmd, sizeof(cmd),
-        //             "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-        //             "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // Format is validated
-        //             // "-pass 2 "
-        //             "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
-        //             "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
-        //             appState->ffmpegPath, job->input, codec,
-        //             videoKbps, //, passLog,
-        //             appState->tempDir, audioKbps, job->output);
-        //}
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         wchar cmdW[ARR_COUNT(cmd)];
@@ -2305,7 +2204,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
                 DWORD err = GetLastError();
                 if (err != ERROR_ALREADY_EXISTS) {
                     // This shouldn't ever happen though
-                    ASSERT(false);
+                    INVALID_CODE_PATH;
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
                     snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
@@ -2499,7 +2398,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
                 DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                              "there. Using exe dir...\n");
                 snprintf(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
-                ASSERT(false);
+                INVALID_CODE_PATH;
             }
         }
     }
