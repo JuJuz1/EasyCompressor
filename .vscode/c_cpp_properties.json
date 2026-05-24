@@ -13,7 +13,8 @@
             "defines": [
                 "COMPRESSOR_WIN32=1",
                 "COMPRESSOR_DEV=1",
-                "COMPRESSOR_DEBUG=1"
+                "COMPRESSOR_DEBUG=1",
+                "UNICODE"
             ]
         }
     ],

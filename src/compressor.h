@@ -21,6 +21,8 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
+typedef wchar_t wchar;
+
 // clang-format off
 
 // clang-tidy NOLINTBEGIN
@@ -31,12 +33,30 @@ typedef double f64;
 #endif
 // clang-tidy NOLINTEND
 
-#define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+#define ARR_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
 
 // clang-format on
 
+/**
+ * Returns number of bytes, NOT the number of "real" characters
+ */
 static i32
 StrLength(const char* str) {
+    ASSERT(str);
+
+    i32 len{};
+    while (*str++) {
+        len++;
+    }
+
+    return len;
+}
+
+/**
+ * Returns number of code units, DON'T use for file I/O
+ */
+static i32
+StrLengthW(const wchar* str) {
     ASSERT(str);
 
     i32 len{};
