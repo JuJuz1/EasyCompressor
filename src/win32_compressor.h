@@ -27,8 +27,8 @@ enum class Codec : u8 {
 
 struct UIJob {
     char input[MAX_PATH_COUNT];
-    char output[MAX_PATH_COUNT + 12]; // "_compressed" suffix by default
-    //bool32 hasValidFileExtension;     // Some file extension is required by ffmpeg pass 2
+    char output[MAX_PATH_COUNT]; // No suffix anymore
+    //bool32 hasValidFileExtension; Some file extension is required by ffmpeg pass 2
     // We pass "-f mp4" as default if this is false
 
     f32 inputFileSize;
@@ -59,7 +59,11 @@ struct UIJob {
 
 // Mainly for popup dialogs
 struct UIState {
+    char errorMsg[128]; // Buffer for different error messages
+    bool32 showError;
     bool32 helpAboutClicked;
+
+    // Input
     bool32 escJustPressed; // Here for now becase we really don't need a whole lot of inputs
 };
 
@@ -80,8 +84,8 @@ struct AppState {
     // All UI state with ImGui
     UIState uiState;
 
-    char defaultOutputFolder[MAX_PATH_COUNT]; // User/Documents
-    bool32 useDefaultOutputFolder;
+    char outputFolder[MAX_PATH_COUNT]; // User/Documents
+    //bool32 useOutputFolder;
 
     char exeDir[MAX_PATH_COUNT];  // Absolute path to the exe directory
     char tempDir[MAX_PATH_COUNT]; // Temp dir for ffmpeg logs

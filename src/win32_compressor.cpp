@@ -3,24 +3,31 @@
 
     The atomic reads via _Interlocked* might never be needed here as 32-bit reads and writes might
     be already guaranteed to be atomic on x86
+
+    Unicode:
+
+    All strings are internally stored as char* which are compatible with UTF-8
+    Strings are converted to wchar* UTF-16 for Windows API calls
+
+    It would really simplify things if the strings are stored as UTF-16 internally also, but it is
+    what it is right?
 */
 
-// TODO: UNICODE SUPPORT?
+#define UNICODE
 
 #if COMPRESSOR_WIN32
-//#    define UNICODE
 #    define WIN32_LEAN_AND_MEAN
-//#    define POPEN _popen
-//#    define PCLOSE _pclose
 #    define PATH_SEP '\\'
+#    define PATH_SEPW L'\\'
 #    define NULL_DEV "NUL"
 
 #    include <windows.h>
 
 #    include <cderr.h>       // CommDlg errors
-#    include <commdlg.h>     // OFN, GetSaveFileNameA
-#    include <shlobj_core.h> // SHGetFolderPathA, SHBrowseForFolderA
-#    include <shlwapi.h>     // PathFileExistsA
+#    include <commdlg.h>     // OFN, GetSaveFileNameW
+#    include <pathcch.h>     // PathCchRemoveFileSpec
+#    include <shlobj_core.h> // SHGetFolderPathW, SHBrowseForFolderW
+#    include <shlwapi.h>     // PathFileExistsW
 
 // Windows...
 #    ifdef ERROR
@@ -53,7 +60,9 @@
 
 #include "win32_compressor.h"
 
+// 😈, works :)
 #define COMPRESSOR_NAME "EasyCompressor"
+#define COMPRESSOR_NAMEW L"EasyCompressor"
 
 /// Globals
 
@@ -72,6 +81,8 @@ static i64 gPerfFreq;
 
 #if COMPRESSOR_DEBUG
 
+// TODO: these don't currently print UTF-16 correctly, but they don't have to as we store strings as
+// UTF-8 internally
 static void
 DEBUG_PRINT(const char* msg) {
     OutputDebugStringA(msg);
@@ -83,7 +94,7 @@ DEBUG_PRINTF(const char* fmt, ...) {
     char buf[512];
     va_list args;
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    vsnprintf(buf, ARR_COUNT(buf), fmt, args);
     va_end(args);
 
     OutputDebugStringA(buf);
@@ -102,26 +113,44 @@ PRINTF(const char* fmt, ...) {
     char buf[512];
     va_list args;
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    vsnprintf(buf, ARR_COUNT(buf), fmt, args);
     va_end(args);
 
     OutputDebugStringA(buf);
 }
 
+/// -----------------------------------------------------------------------------
+/// String conversions
+/// -----------------------------------------------------------------------------
+
 static void
-ShowNotification(const char* msg, const char* title, DWORD flags) {
+UTF8To16(const char* utf8, wchar* out, i32 len = MAX_PATH_COUNT) {
+    // Some limit
+    ASSERT(len >= 0 && len <= MAX_PATH_COUNT * 4);
+    //i32 required = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out->data(), 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out, len);
+}
+
+static void
+UTF16To8(const wchar* utf16, char* out, i32 len = MAX_PATH_COUNT) {
+    ASSERT(len >= 0 && len <= MAX_PATH_COUNT * 4);
+    WideCharToMultiByte(CP_UTF8, 0, utf16, -1, out, len, nullptr, nullptr);
+}
+
+static void
+ShowNotification(const wchar* msg, const wchar* title, DWORD flags) {
     ASSERT(gHwnd);
 
-    NOTIFYICONDATAA data = {};
+    NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
     data.hWnd = gHwnd;
     data.uFlags = NIF_INFO | NIF_TIP;
     data.dwInfoFlags = flags; // NIIF_INFO, NIIF_WARNING, NIIF_ERROR
 
-    snprintf(data.szTip, sizeof(data.szTip), COMPRESSOR_NAME);
-    snprintf(data.szInfo, sizeof(data.szInfo), "%s", msg);
-    snprintf(data.szInfoTitle, sizeof(data.szInfoTitle), "%s", title);
-    Shell_NotifyIconA(NIM_MODIFY, &data);
+    swprintf(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
+    swprintf(data.szInfo, ARR_COUNT(data.szInfo), L"%ls", msg);
+    swprintf(data.szInfoTitle, ARR_COUNT(data.szInfoTitle), L"%ls", title);
+    Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
 /**
@@ -129,7 +158,7 @@ ShowNotification(const char* msg, const char* title, DWORD flags) {
  */
 static void
 AddTrayIcon(HWND hWnd, HICON hIcon) {
-    NOTIFYICONDATAA data = {};
+    NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
     data.hWnd = hWnd;
     data.uFlags = //NIF_MESSAGE |
@@ -137,8 +166,8 @@ AddTrayIcon(HWND hWnd, HICON hIcon) {
     //data.uCallbackMessage = ?; Can be used inside WndProc
     data.hIcon = hIcon;
 
-    snprintf(data.szTip, sizeof(data.szTip), COMPRESSOR_NAME);
-    Shell_NotifyIconA(NIM_ADD, &data);
+    swprintf(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
+    Shell_NotifyIconW(NIM_ADD, &data);
 }
 
 static LARGE_INTEGER
@@ -192,104 +221,66 @@ CodecText_(Codec s) {
     return "";
 }
 
-//static bool32
-//IsValidExtension(const char* check) {
-//    if (!check) {
-//        return false;
-//    }
-
-//    bool32 valid = false;
-
-//    return valid;
-//}
-
 static void
-ConstructPathsForJob(AppState* appState, UIJob* j, const char* path) {
-    snprintf(j->input, sizeof(j->input), "%s", path);
+ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
+    UTF16To8(path, j->input);
+    //snprintf(j->input, sizeof(j->input), "%s", s.c_str());
 
-    // TODO: maybe just use a dedicated output folder and use the input name as output
-    // that way we wouldn't have to do this string processing nonsense
-    // Also should probably use the Windows API for path processing as we don't handle UNC paths or
+    // TODO: should probably use the Windows API for path processing as we don't handle UNC paths or
     // device paths at all here!
 
-    const char* lastDot = nullptr;
+    ASSERT(appState->outputFolder[0] != '\0');
+
+    // Find last path separator in input (UTF-8 safe because '\' and '/' are ASCII)
+    const char* lastSlash = nullptr;
     for (const char* scan = j->input; *scan; ++scan) {
-        if (*scan == '.') {
-            lastDot = scan;
+        if (*scan == PATH_SEP) {
+            lastSlash = scan + 1;
         }
     }
 
-    // No file extension found...
-    // Don't fail, but construct a default path without the extension but with _compressed
-    if (!lastDot) {
-        DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
-        if (appState->useDefaultOutputFolder) {
-            ASSERT(appState->defaultOutputFolder[0] != '\0');
-            const char* lastSlash = nullptr;
-            for (const char* scan = j->input; *scan; ++scan) {
-                if (*scan == PATH_SEP) {
-                    lastSlash = scan + 1;
-                }
-            }
-
-            if (lastSlash) {
-                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed",
-                         appState->defaultOutputFolder, lastSlash);
-            } else {
-                // This kind of should never happen
-                // TODO: fallback to using the default input path just like when no default output
-                // folder is selected? This will change if we always require a default output folder
-                // even if it can be disabled or not!
-                ASSERT(false);
-            }
-        } else {
-            snprintf(j->output, sizeof(j->output), "%s_compressed", j->input);
-        }
+    // TODO: this probably suffices as we don't have to do any string processing really
+    // Just always use the output folder specified and remove the checkbox
+    if (lastSlash) {
+        snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
     } else {
-        // IMPORTANT:
-        // TODO: validate file extension !!!OTHERWISE WE MIGHT PASS GARBAGE TO FFMPEG...
-        // pass 2 seems to fail with random extensions when I tested, like .kkhh
-        // On a further note, we should probably not validate the extension but rather based on the
-        // codec choose the output container format
-
-        // Use -f mp4 for now before we figure this out fully
-        //const char* check = lastDot + 1;
-        //bool32 valid = IsValidExtension(check);
-        //j->hasValidFileExtension = valid;
-
-        i32 extensionLen = StrLength(lastDot);
-        i32 inputLen = StrLength(j->input);
-        i32 baseLen = inputLen - extensionLen; // Without extension
-
-        char base[MAX_PATH_COUNT];
-        CopyMemory(base, j->input, baseLen);
-        base[baseLen] = '\0';
-
-        if (appState->useDefaultOutputFolder) {
-            ASSERT(appState->defaultOutputFolder[0] != '\0');
-            const char* lastSlash = nullptr;
-            for (const char* scan = base; *scan; ++scan) {
-                if (*scan == PATH_SEP) {
-                    lastSlash = scan + 1;
-                }
-            }
-
-            if (lastSlash) {
-                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed%s",
-                         appState->defaultOutputFolder, lastSlash, lastDot);
-            } else {
-                ASSERT(false);
-            }
-        } else {
-            snprintf(j->output, sizeof(j->output), "%s_compressed%s", base, lastDot);
-        }
+        INVALID_CODE_PATH;
     }
 }
 
 static void
-AddJob(AppState* appState, const char* path) {
+SetPopupError(AppState* appState, const char* error) {
+    UIState* uiState = &appState->uiState;
+    uiState->showError = true;
+    ASSERT(StrLength(error) < ARR_COUNT(uiState->errorMsg));
+    snprintf(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), "%s", error);
+}
+
+static void
+AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
+        return;
+    }
+
+    // Reject inputs from default output folder to avoid name conflicts
+    // TODO: Other approaches?
+
+    // TODO: consider writing tests for this and ConstructPathsForJob
+    // Would make testing different unicode strings easier
+
+    wchar pathW[MAX_PATH_COUNT];
+    CopyMemory(pathW, path, sizeof(pathW));
+    // We can assume the path always ends with a filename
+    // This function also removes a folder name if its the last "element" in the path
+    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
+
+    char copy[MAX_PATH_COUNT];
+    UTF16To8(pathW, copy);
+    if (StrEqual(copy, appState->outputFolder)) {
+        DEBUG_PRINTF("Tried to input from default output folder %s\n", copy);
+        SetPopupError(appState, "Don't input files from the output folder!\n"
+                                "This is to avoid name conflicts");
         return;
     }
 
@@ -302,7 +293,7 @@ AddJob(AppState* appState, const char* path) {
     ConstructPathsForJob(appState, j, path);
 
     WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-    if (GetFileAttributesExA(j->input, GetFileExInfoStandard, &fileInfo)) {
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, &fileInfo)) {
         u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
         j->inputFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
     } else {
@@ -310,7 +301,7 @@ AddJob(AppState* appState, const char* path) {
     }
 
     // Publish the new job at the end
-    _InterlockedExchange(&appState->jobCount, appState->jobCount + 1);
+    _InterlockedIncrement(&appState->jobCount);
     DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
                  appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
 }
@@ -414,13 +405,16 @@ RunProbe(AppState* appState, UIJob* job) {
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
     char cmd[(MAX_PATH_COUNT * 2) + 128];
-    snprintf(cmd, sizeof(cmd),
+    snprintf(cmd, ARR_COUNT(cmd),
              "\"%sffprobe.exe\" -v error -show_entries format=duration "
              "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
              appState->ffmpegPath, job->input);
     DEBUG_PRINTF("Running: %s\n", cmd);
 
-    STARTUPINFOA si = {};
+    wchar cmdW[ARR_COUNT(cmd)];
+    UTF8To16(cmd, cmdW, ARR_COUNT(cmdW));
+
+    STARTUPINFOW si = {};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = writePipe;
@@ -431,7 +425,7 @@ RunProbe(AppState* appState, UIJob* job) {
     //DEBUG_PRINTF("Creating process ffprobe for job %d\n", i);
     // TODO: handle exiting the program more controlled
     // Now Windows decides if the process should finish or not
-    BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr,
+    BOOL created = CreateProcessW(nullptr, cmdW, nullptr, nullptr,
                                   TRUE, // inherit handles!
                                   CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
 
@@ -451,8 +445,9 @@ RunProbe(AppState* appState, UIJob* job) {
     char output[256];
     DWORD totalRead = 0;
 
-    while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
-        if (totalRead + bytesRead < sizeof(output)) {
+    while (ReadFile(readPipe, buffer, ARR_COUNT(buffer) - 1, &bytesRead, nullptr) &&
+           bytesRead > 0) {
+        if (totalRead + bytesRead < ARR_COUNT(output)) {
             CopyMemory(output + totalRead, buffer, bytesRead);
             totalRead += bytesRead;
         } else {
@@ -610,7 +605,7 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        snprintf(cmd, sizeof(cmd),
+        snprintf(cmd, ARR_COUNT(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // -f mp4, this throws error...
                                                                 // But it works fine without file
@@ -620,14 +615,18 @@ RunCompress(AppState* appState, UIJob* job) {
                  appState->ffmpegPath, job->input, codec, videoKbps, appState->tempDir, NULL_DEV);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
-        STARTUPINFOA si = {};
+        // Probably easier this way as we would have to do 3 conversions otherwise
+        wchar cmdW[ARR_COUNT(cmd)];
+        UTF8To16(cmd, cmdW, ARR_COUNT(cmdW));
+
+        STARTUPINFOW si = {};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = writePipe;
         si.hStdError = writePipe;
 
         PROCESS_INFORMATION pi = {};
-        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+        BOOL created = CreateProcessW(nullptr, cmdW, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                                       nullptr, nullptr, &si, &pi);
 
         CloseHandle(writePipe);
@@ -643,7 +642,7 @@ RunCompress(AppState* appState, UIJob* job) {
         DWORD bytesRead = 0;
 
         bool32 cancelled = false;
-        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        while (ReadFile(readPipe, buffer, ARR_COUNT(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
             if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
                 DEBUG_PRINT("Cancelled ffmpeg pass 1!\n");
@@ -652,7 +651,9 @@ RunCompress(AppState* appState, UIJob* job) {
                 DEBUG_PRINT("Waiting for termination...\n");
                 // Wait before requesting a delete, to safely delete
                 WaitForSingleObject(pi.hProcess, INFINITE);
-                if (!DeleteFileA(job->output)) {
+                wchar outputW[ARR_COUNT(job->output)];
+                UTF8To16(job->output, outputW);
+                if (!DeleteFileW(outputW)) {
                     DEBUG_PRINTF("Couldn't delete file %s after terminating process!\n",
                                  job->output);
                 }
@@ -719,8 +720,7 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        //if (!job->hasValidFileExtension) {
-        snprintf(cmd, sizeof(cmd),
+        snprintf(cmd, ARR_COUNT(cmd),
                  "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                  "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
                  // "-pass 2 "
@@ -729,28 +729,19 @@ RunCompress(AppState* appState, UIJob* job) {
                  appState->ffmpegPath, job->input, codec,
                  videoKbps, //, passLog,
                  appState->tempDir, audioKbps, job->output);
-        //} else {
-        //    snprintf(cmd, sizeof(cmd),
-        //             "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-        //             "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // Format is validated
-        //             // "-pass 2 "
-        //             "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
-        //             "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
-        //             appState->ffmpegPath, job->input, codec,
-        //             videoKbps, //, passLog,
-        //             appState->tempDir, audioKbps, job->output);
-        //}
-
         DEBUG_PRINTF("Running: %s\n", cmd);
 
-        STARTUPINFOA si = {};
+        wchar cmdW[ARR_COUNT(cmd)];
+        UTF8To16(cmd, cmdW, ARR_COUNT(cmdW));
+
+        STARTUPINFOW si = {};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = writePipe;
         si.hStdError = writePipe;
 
         PROCESS_INFORMATION pi = {};
-        BOOL created = CreateProcessA(nullptr, cmd, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+        BOOL created = CreateProcessW(nullptr, cmdW, nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
                                       nullptr, nullptr, &si, &pi);
 
         CloseHandle(writePipe);
@@ -766,7 +757,7 @@ RunCompress(AppState* appState, UIJob* job) {
         DWORD bytesRead = 0;
 
         bool32 cancelled = false;
-        while (ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) &&
+        while (ReadFile(readPipe, buffer, ARR_COUNT(buffer) - 1, &bytesRead, nullptr) &&
                bytesRead > 0) {
             if (_InterlockedCompareExchange(&appState->cancelRequested, 0, 0)) {
                 DEBUG_PRINT("Cancelled ffmpeg pass 2!\n");
@@ -774,7 +765,9 @@ RunCompress(AppState* appState, UIJob* job) {
 
                 DEBUG_PRINT("Waiting for termination...\n");
                 WaitForSingleObject(pi.hProcess, INFINITE);
-                if (!DeleteFileA(job->output)) {
+                wchar outputW[ARR_COUNT(job->output)];
+                UTF8To16(job->output, outputW);
+                if (!DeleteFileW(outputW)) {
                     DEBUG_PRINTF("Couldn't delete file %s after terminating process!\n",
                                  job->output);
                 }
@@ -818,8 +811,11 @@ RunCompress(AppState* appState, UIJob* job) {
             return;
         }
 
+        wchar outputW[ARR_COUNT(job->output)];
+        UTF8To16(job->output, outputW);
+
         WIN32_FILE_ATTRIBUTE_DATA fileInfo;
-        if (GetFileAttributesExA(job->output, GetFileExInfoStandard, &fileInfo)) {
+        if (GetFileAttributesExW(outputW, GetFileExInfoStandard, &fileInfo)) {
             u64 bytes = (static_cast<u64>(fileInfo.nFileSizeHigh) << 32) | fileInfo.nFileSizeLow;
             job->resultFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
         } else {
@@ -877,9 +873,9 @@ WorkerThread(void* param) {
 
             _InterlockedExchange(&appState->compressing, 0);
             if (!cancelled) {
-                char buff[64];
-                snprintf(buff, sizeof(buff), "%d video(s)", jobCount);
-                ShowNotification(buff, "Compression finished", NIIF_INFO);
+                wchar buff[32];
+                swprintf(buff, ARR_COUNT(buff), L"%d video(s)", jobCount);
+                ShowNotification(buff, L"Compression finished", NIIF_INFO);
             }
         }
 
@@ -904,7 +900,11 @@ StartBatch(AppState* appState) {
 
 static void
 GetExeDirectory(AppState* appState) {
-    GetModuleFileNameA(nullptr, appState->exeDir, sizeof(appState->exeDir));
+    wchar exeDir[ARR_COUNT(appState->exeDir)];
+    GetModuleFileNameW(nullptr, exeDir, MAX_PATH_COUNT);
+
+    //UTF16To8Fixed(exeDir, appState->exeDir, ARR_COUNT(appState->exeDir));
+    UTF16To8(exeDir, appState->exeDir);
 
     i32 lastSlashIndex = -1;
     const char* scan = appState->exeDir;
@@ -921,21 +921,25 @@ GetExeDirectory(AppState* appState) {
 
 static void
 SelectInExplorer(HWND hWnd, const char* path) {
-    char cmd[MAX_PATH_COUNT];
-    snprintf(cmd, sizeof(cmd), "/select,\"%s\"", path);
-    ShellExecuteA(hWnd, "open", "explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
+    wchar cmd[MAX_PATH_COUNT];
+    swprintf(cmd, ARR_COUNT(cmd), L"/select,\"%ls\"", pathW);
+    ShellExecuteW(hWnd, L"open", L"explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
 }
 
 static void
 OpenInExplorer(HWND hWnd, const char* path) {
-    ShellExecuteA(hWnd, "open", "explorer.exe", path, nullptr, SW_SHOWNORMAL);
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
+    ShellExecuteW(hWnd, L"open", L"explorer.exe", pathW, nullptr, SW_SHOWNORMAL);
 }
 
 static void
 PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
-    char buffer[MAX_PATH_COUNT] = {};
+    wchar buffer[MAX_PATH_COUNT] = {};
 
-    OPENFILENAMEA ofn = {};
+    OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
 
     ofn.hwndOwner = hWnd;
@@ -943,16 +947,16 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
 
     // TODO: more extensions
     // TODO: not all are tested but ffmpeg should support these with no problem
-    ofn.lpstrFilter = "Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
+    ofn.lpstrFilter = L"Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
                       "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
                       "All Files (*.*)\0"
                       "*.*\0";
     ofn.lpstrFile = buffer;
-    ofn.lpstrTitle = "Select output file";
-    ofn.nMaxFile = sizeof(buffer);
+    ofn.lpstrTitle = L"Select output file";
+    ofn.nMaxFile = ARR_COUNT(buffer);
     // NOCHANGE_DIR to prevent generating imgui.ini
     ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-    ofn.lpstrDefExt = "mp4";
+    ofn.lpstrDefExt = L"mp4";
 
     // TODO: throws some weird exceptions via explorerframe.dll
     // Error codes 80004001, 80070057
@@ -960,8 +964,9 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
     // TODO: consider using the more modern IFileDialog
     // https://learn.microsoft.com/en-us/windows/win32/shell/common-file-dialog
     // But taking a look at it, it's just so messy compared to this... (not a surprise though)
-    if (GetSaveFileNameA(&ofn)) {
-        CopyMemory(outPath, ofn.lpstrFile, MAX_PATH_COUNT);
+    if (GetSaveFileNameW(&ofn)) {
+        //CopyMemory(outPath, ofn.lpstrFile, MAX_PATH_COUNT);
+        UTF16To8(ofn.lpstrFile, outPath);
         DEBUG_PRINTF("Picked new output path: %s\n", outPath);
     } else {
         DWORD err = CommDlgExtendedError();
@@ -984,9 +989,10 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
  */
 static void
 SaveOutputPathToConfig(AppState* appState, const char* path) {
-    char configFilePath[MAX_PATH_COUNT + 18];
-    snprintf(configFilePath, sizeof(configFilePath), "%s\\easycompressor.cfg", appState->appData);
-    HANDLE file = CreateFileA(configFilePath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    wchar configFilePath[ARR_COUNT(appState->appData) + 32];
+    UTF8To16(appState->appData, configFilePath);
+    swprintf(configFilePath, ARR_COUNT(configFilePath), L"%ls\\easycompressor.cfg", configFilePath);
+    HANDLE file = CreateFileW(configFilePath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         DEBUG_PRINT("Failed to open config for writing!\n");
@@ -996,11 +1002,11 @@ SaveOutputPathToConfig(AppState* appState, const char* path) {
     char buff[MAX_PATH_COUNT + 512];
 
     DWORD read = 0;
-    ReadFile(file, buff, sizeof(buff), &read, nullptr);
+    ReadFile(file, buff, ARR_COUNT(buff), &read, nullptr);
     CloseHandle(file);
     buff[read] = '\0';
 
-    HANDLE out = CreateFileA(configFilePath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+    HANDLE out = CreateFileW(configFilePath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                              FILE_ATTRIBUTE_NORMAL, nullptr);
     const char* p = buff;
     DWORD written = 0;
@@ -1034,24 +1040,25 @@ SaveOutputPathToConfig(AppState* appState, const char* path) {
 }
 
 static void
-PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
-    BROWSEINFOA bi = {};
+PickoutputFolder(HWND hWnd, AppState* appState) {
+    BROWSEINFOW bi = {};
     bi.hwndOwner = hWnd;
-    bi.lpszTitle = "Select output folder";
+    bi.lpszTitle = L"Select output folder";
     //OleInitialize();
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
 
-    LPITEMIDLIST result = SHBrowseForFolderA(&bi);
+    LPITEMIDLIST result = SHBrowseForFolderW(&bi);
     if (result) {
-        char buffer[MAX_PATH_COUNT] = {};
-        if (SHGetPathFromIDListA(result, buffer)) {
-            CopyMemory(appState->defaultOutputFolder, buffer, MAX_PATH_COUNT);
+        wchar buffer[MAX_PATH_COUNT] = {};
+        if (SHGetPathFromIDListW(result, buffer)) {
+            //CopyMemory(appState->outputFolder, buffer, MAX_PATH_COUNT);
+            UTF16To8(buffer, appState->outputFolder);
             // This overwrites the selected value always
             // I think it's the most expected approach as if the user selects a new output path it
             // should be automatically be activated
-            appState->useDefaultOutputFolder = true;
-            DEBUG_PRINTF("Picked new default output path: %s\n", appState->defaultOutputFolder);
-            SaveOutputPathToConfig(appState, buffer);
+            //appState->useoutputFolder = true;
+            DEBUG_PRINTF("Picked new default output path: %s\n", appState->outputFolder);
+            SaveOutputPathToConfig(appState, appState->outputFolder);
         } else {
             DEBUG_PRINT("Couldn't get selected default folder path!\n");
         }
@@ -1063,26 +1070,26 @@ PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
 static void
 PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // TODO: Take care of stack size if MAX_PATH_COUNT is changed
-    char buffer[MAX_PATH_COUNT * MAX_JOBS] = {};
+    wchar buffer[MAX_PATH_COUNT * MAX_JOBS] = {};
 
-    OPENFILENAMEA ofn = {};
+    OPENFILENAME ofn = {};
     ofn.lStructSize = sizeof(ofn);
 
     ofn.hwndOwner = hWnd;
     ofn.hInstance = hInstance;
 
     // TODO: more extensions
-    ofn.lpstrFilter = "Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
+    ofn.lpstrFilter = L"Video Files (*.mp4, *.mov, *.mkv, *.avi, *.webm)\0"
                       "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
                       "All Files (*.*)\0"
                       "*.*\0";
     ofn.lpstrFile = buffer;
-    ofn.lpstrTitle = "Select input files";
-    ofn.nMaxFile = sizeof(buffer);
+    ofn.lpstrTitle = L"Select input files";
+    ofn.nMaxFile = ARR_COUNT(buffer);
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
-    ofn.lpstrDefExt = "mp4";
+    ofn.lpstrDefExt = L"mp4";
 
-    if (!GetOpenFileNameA(&ofn)) {
+    if (!GetOpenFileName(&ofn)) {
         DWORD err = CommDlgExtendedError();
         DEBUG_PRINTF("CommDlgExtendedError in PickInputFiles: %u\n", err);
         return;
@@ -1093,21 +1100,21 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // When a single file selected
     // "C:\dir\file1.mp4\0\0"
     // We can see it ends with a double null termination
-    const char* dir = buffer;
-    const char* file = buffer + ofn.nFileOffset; // Get the first file
+    const wchar* dir = buffer;
+    const wchar* file = buffer + ofn.nFileOffset; // Get the first file
 
     // Single file
-    if (*(file - 1) != '\0') {
+    if (*(file - 1) != L'\0') {
         AddJob(appState, buffer);
         return;
     }
 
     // Multiple files
     while (*file) {
-        char path[MAX_PATH_COUNT];
-        snprintf(path, sizeof(path), "%s\\%s", dir, file);
-        AddJob(appState, path);
-        file += StrLength(file) + 1;
+        wchar fullW[MAX_PATH_COUNT];
+        swprintf(fullW, L"%s\\%s", dir, file);
+        AddJob(appState, fullW);
+        file += StrLengthW(file) + 1;
     }
 }
 
@@ -1284,27 +1291,27 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, 10.0f);
 
-    ImGui::TextUnformatted("Default output folder:");
+    ImGui::TextUnformatted("Output folder:");
 
     ImGui::SameLine();
-    if (appState->defaultOutputFolder[0] == '\0') {
+    if (appState->outputFolder[0] == '\0') {
         ImGui::TextUnformatted("No default folder selected");
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
 
         // TODO: easily configurable if needed
         const f32 maxWidth = 550.0f;
-        f32 requiredWidth = ImGui::CalcTextSize(appState->defaultOutputFolder).x;
+        f32 requiredWidth = ImGui::CalcTextSize(appState->outputFolder).x;
         requiredWidth = ClampF32(requiredWidth, 0.0f, maxWidth);
 
         ImGui::PushItemWidth(requiredWidth);
-        ImGui::Selectable(appState->defaultOutputFolder, false, 0, ImVec2(requiredWidth, 0.0f));
+        ImGui::Selectable(appState->outputFolder, false, 0, ImVec2(requiredWidth, 0.0f));
         ImGui::PopItemWidth();
         ImGui::PopStyleColor();
 
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            ImGui::Text(appState->defaultOutputFolder);
+            ImGui::Text(appState->outputFolder);
             ImGui::TextUnformatted("Click to change folder\n"
                                    "Middle click to open folder in explorer\n"
                                    "Right click for more options");
@@ -1312,23 +1319,23 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-            PickDefaultOutputFolder(hWnd, appState);
+            PickoutputFolder(hWnd, appState);
             ImGui::GetIO().ClearInputMouse();
         } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-            OpenInExplorer(hWnd, appState->defaultOutputFolder);
+            OpenInExplorer(hWnd, appState->outputFolder);
         } else if (ImGui::BeginPopupContextItem("default_folder_menu")) {
             if (ImGui::MenuItem("Open folder in explorer...")) {
-                OpenInExplorer(hWnd, appState->defaultOutputFolder);
+                OpenInExplorer(hWnd, appState->outputFolder);
             }
 
             ImGui::EndPopup();
         }
     }
 
-    ImGui::SameLine();
-    ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useDefaultOutputFolder));
+    //ImGui::SameLine();
+    //ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useoutputFolder));
 
-    for (i32 i = 0; i < ARRAY_COUNT(appState->targetSizes); ++i) {
+    for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];
         // Default value which is filled if the user supplied less than TARGET_SIZES_COUNT
         if (size == 0.0f) {
@@ -1340,7 +1347,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
 
         char label[32];
-        snprintf(label, sizeof(label), "%.1f MB##default_%d", size, i);
+        snprintf(label, ARR_COUNT(label), "%.1f MB##default_%d", size, i);
         if (ImGui::Button(label, ImVec2(80 * scale, 0))) {
             *defaultTargetSize = size;
         }
@@ -1380,10 +1387,11 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     f32 rowHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
     f32 footerHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f;
 
-    ImVec2 tableSize(0.0f, ImClamp(headerHeight + rowHeight * appState->jobCount,
-                                   0.0f, //ImGui::GetContentRegionAvail().y - footerHeight, make the
-                                         // table full window height accounting for footer
-                                   ImGui::GetContentRegionAvail().y - footerHeight));
+    ImVec2 tableSize(0.0f,
+                     ImClamp(headerHeight + (rowHeight * static_cast<f32>(appState->jobCount)),
+                             0.0f, //ImGui::GetContentRegionAvail().y - footerHeight, make the
+                                   // table full window height accounting for footer
+                             ImGui::GetContentRegionAvail().y - footerHeight));
 
     if (ImGui::BeginTable("jobs", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
@@ -1435,7 +1443,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             ImGui::BeginDisabled(jobRunning || i < highestRunningIndex);
             {
                 char label[4];
-                snprintf(label, sizeof(label), "%d", i + 1);
+                snprintf(label, ARR_COUNT(label), "%d", i + 1);
                 // Full cell width and height
                 ImGui::Selectable(
                     label, false, 0,
@@ -1717,15 +1725,22 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     //ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
     //                        ImVec2(0.5f, 0.5f));
+
+    // Declare popups
+
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextUnformatted(COMPRESSOR_NAME);
         ImGui::Separator();
 
-        ImGui::TextUnformatted("Built with");
+        ImGui::TextUnformatted("Built with:");
         ImGui::SameLine();
         ImGui::TextLinkOpenURL("ImGui", "https://github.com/ocornut/imgui");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Source:");
+        ImGui::SameLine();
+        ImGui::TextLinkOpenURL("EasyCompressor", "https://github.com/JuJuz1/EasyCompressor");
 
         ImGui::Text("Max length for input/output paths is %d", MAX_PATH_COUNT);
         ImGui::TextUnformatted("Small target sizes (below 10 MB) might result in the\ncompressed "
@@ -1738,9 +1753,27 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::EndPopup();
     }
 
+    if (ImGui::BeginPopupModal("ErrorPopup", nullptr,
+                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextUnformatted(uiState->errorMsg);
+        if (ImGui::Button("OK") || uiState->escJustPressed) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // Handle popups
+
     if (uiState->helpAboutClicked) {
         ImGui::OpenPopup("HelpAboutPopup");
         uiState->helpAboutClicked = false;
+    }
+
+    if (uiState->showError) {
+        ImGui::OpenPopup("ErrorPopup");
+        uiState->showError = false;
     }
 }
 
@@ -1847,24 +1880,24 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wParam);
-        UINT fileCount = DragQueryFileA(drop, 0xFFFFFFFF, nullptr, 0);
+        UINT fileCount = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
         // TODO: validate by most common video file extensions?
         // We do allow files with no extension so probably not...
         for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
-            char path[MAX_PATH_COUNT];
+            wchar path[MAX_PATH_COUNT];
             // Query the required character amount first, not including null terminator
             // If we don't query we have no way of deducing if the path was truncated or it's
             // exactly MAX_PATH_COUNT long
-            UINT required = DragQueryFileA(drop, i, nullptr, 0);
+            UINT required = DragQueryFileW(drop, i, nullptr, 0);
 
             // Get the path and get the copied amount, not including null terminator
-            UINT copied = DragQueryFileA(drop, i, path, sizeof(path));
+            UINT copied = DragQueryFileW(drop, i, path, ARR_COUNT(path));
 
             DEBUG_PRINTF("Required: %u, copied %u (both not including null terminator)\n", required,
                          copied);
 
             // required > copied would work as well
-            if (required >= sizeof(path)) {
+            if (required >= ARR_COUNT(path)) {
                 DEBUG_PRINTF("Path was truncated, didn't add job! Max length: %d\nPath would have "
                              "been %s\n",
                              MAX_PATH_COUNT, path);
@@ -1900,14 +1933,16 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     } break;
     }
 
-    return DefWindowProcA(hWnd, msg, wParam, lParam);
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
 static bool32
 CreateDefaultConfigFile(const char* path) {
     DEBUG_PRINT("Trying to create default config file...\n");
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
     HANDLE file =
-        CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        CreateFileW(pathW, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
         DEBUG_PRINT("Couldn't create default config file!\n");
         return false;
@@ -1929,7 +1964,7 @@ CreateDefaultConfigFile(const char* path) {
 
     DWORD written = 0;
     // Don't write null terminator
-    WriteFile(file, content, sizeof(content) - 1, &written, nullptr);
+    WriteFile(file, content, ARR_COUNT(content) - 1, &written, nullptr);
     if (written == 0) {
         DEBUG_PRINT("Couldn't write to default config file!\n");
         CloseHandle(file);
@@ -1946,7 +1981,9 @@ CreateDefaultConfigFile(const char* path) {
  */
 static bool32
 LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
-    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
+    HANDLE file = CreateFileW(pathW, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
         DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
@@ -1956,7 +1993,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
     char buf[512 + MAX_PATH_COUNT];
     DWORD bytesRead = 0;
 
-    if (!ReadFile(file, buf, sizeof(buf), &bytesRead, nullptr) || bytesRead == 0) {
+    if (!ReadFile(file, buf, ARR_COUNT(buf), &bytesRead, nullptr) || bytesRead == 0) {
         DEBUG_PRINT("Couldn't read file!\n");
         CloseHandle(file);
         return false;
@@ -1972,7 +2009,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
     bool32 foundDefaultForCodec = false;
     const char* p = buf;
 
-    i32 sizesCount = ARRAY_COUNT(appState->targetSizes);
+    i32 sizesCount = ARR_COUNT(appState->targetSizes);
 
     // Currently handles whitespace and other characters at the end only
     // I think this is fine
@@ -2106,16 +2143,19 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
                 CopyMemory(outputPath, start, len);
                 outputPath[len] = '\0';
 
-                if (PathIsRelativeA(outputPath)) {
+                wchar outputPathW[ARR_COUNT(outputPath)];
+                UTF8To16(outputPath, outputPathW);
+
+                if (PathIsRelativeW(outputPathW)) {
                     DEBUG_PRINTF("Tried to use relative path %s\n", outputPath);
                 } else {
-                    DWORD attrs = GetFileAttributesA(outputPath);
+                    DWORD attrs = GetFileAttributesW(outputPathW);
                     bool32 valid = false;
 
                     if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
                         valid = true;
                     } else {
-                        if (CreateDirectoryA(outputPath, nullptr)) {
+                        if (CreateDirectoryW(outputPathW, nullptr)) {
                             valid = true;
                         } else {
                             DWORD err = GetLastError();
@@ -2127,8 +2167,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
                     if (valid) {
                         DEBUG_PRINTF("Using output path: %s\n", outputPath);
-                        snprintf(appState->defaultOutputFolder,
-                                 sizeof(appState->defaultOutputFolder), "%s", outputPath);
+                        snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder),
+                                 outputPath);
                     } else {
                         DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
                     }
@@ -2147,35 +2187,35 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
     // Having no output path is NOT considered a failure
     // We just use the default User/Documents/EasyCompressor
-    if (appState->defaultOutputFolder[0] == '\0') {
-        char outputFolder[MAX_PATH_COUNT];
-        if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
+    if (appState->outputFolder[0] == '\0') {
+        wchar outputFolder[MAX_PATH_COUNT];
+        if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
             DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
             // Use exe dir as working dir...
-            snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder), "%s",
+            snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
                      appState->exeDir);
         } else {
-            DEBUG_PRINTF("Found documents %s\n", outputFolder);
-            snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder),
-                     "%s\\EasyCompressor", outputFolder);
+            DEBUG_PRINTF("Found documents %ls\n", outputFolder);
+            swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
             // It's okay to fail silently
-            BOOL created = CreateDirectoryA(appState->defaultOutputFolder, nullptr);
+            BOOL created = CreateDirectoryW(outputFolder, nullptr);
+            UTF16To8(outputFolder, appState->outputFolder);
             if (!created) {
                 DWORD err = GetLastError();
                 if (err != ERROR_ALREADY_EXISTS) {
                     // This shouldn't ever happen though
-                    ASSERT(false);
+                    INVALID_CODE_PATH;
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
-                    snprintf(appState->defaultOutputFolder, sizeof(appState->defaultOutputFolder),
-                             "%s", appState->exeDir);
+                    snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                             appState->exeDir);
                 }
             }
         }
     }
 
     // I guess this for now as the default
-    appState->useDefaultOutputFolder = true;
+    //appState->useOutputFolder = true;
 
     // Having no codecs is NOT considered a failure
     // Having no default codec is also NOT considered a failure
@@ -2211,29 +2251,38 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     f32 mainScale = ImGui_ImplWin32_GetDpiScaleForMonitor(
         MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    // | DEV | DEBUG + null term
-    char windowName[sizeof(COMPRESSOR_NAME) + 6 + 8 + 1];
-    snprintf(windowName, sizeof(windowName), COMPRESSOR_NAME);
+    // | DEV | DEBUG
+    char windowName[ARR_COUNT(COMPRESSOR_NAME) + 6 + 8];
+    snprintf(windowName, ARR_COUNT(windowName), COMPRESSOR_NAME);
 #if COMPRESSOR_DEV
-    snprintf(windowName, sizeof(windowName), "%s | DEV", windowName);
+    snprintf(windowName, ARR_COUNT(windowName), "%s | DEV", windowName);
+//windowName += L" | DEV";
 #endif
 #if COMPRESSOR_DEBUG
-    snprintf(windowName, sizeof(windowName), "%s | DEBUG", windowName);
+    snprintf(windowName, ARR_COUNT(windowName), "%s | DEBUG", windowName);
+//windowName += L" | DEBUG";
 #endif
 
-    WNDCLASSEXA windowClass = { sizeof(windowClass), CS_CLASSDC, WndProc, 0,       0,
-                                hInstance,           nullptr,    nullptr, nullptr, nullptr,
-                                windowName,          nullptr };
+    wchar windowNameW[ARR_COUNT(windowName)];
+    UTF8To16(windowName, windowNameW);
 
-    if (!RegisterClassExA(&windowClass)) {
+    // Using the Windows API wide versions will be a pain...
+    WNDCLASSEXW windowClass = {
+        sizeof(windowClass), CS_CLASSDC, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr,
+        nullptr, //windowName.c_str(),
+        // Reinterpret is safe if they are ascii, but in other cases this breaks
+        windowNameW, nullptr
+    };
+
+    if (!RegisterClassExW(&windowClass)) {
         DEBUG_PRINT("Failed to register windowClass!\n");
         return 0;
     }
 
-    HWND hWnd =
-        CreateWindowExA(0, windowClass.lpszClassName, windowName, WS_OVERLAPPEDWINDOW, 100, 100,
-                        static_cast<i32>(1280 * mainScale), static_cast<i32>(800 * mainScale),
-                        nullptr, nullptr, hInstance, nullptr);
+    HWND hWnd = CreateWindowExW(
+        0, windowClass.lpszClassName, //windowName.c_str()
+        windowNameW, WS_OVERLAPPEDWINDOW, 100, 100, static_cast<i32>(1280 * mainScale),
+        static_cast<i32>(800 * mainScale), nullptr, nullptr, hInstance, nullptr);
 
     if (!hWnd) {
         DEBUG_PRINT("Failed to create windowHandle!\n");
@@ -2255,7 +2304,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     /// Notifications
     // TODO: custom icon?
     //gIcon = LoadIconA(hInstance, MAKEINTRESOURCEA(1));
-    HICON hIcon = LoadIconA(nullptr, IDI_APPLICATION);
+    HICON hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     ASSERT(hIcon);
     AddTrayIcon(hWnd, hIcon);
 
@@ -2283,6 +2332,21 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     GetExeDirectory(&appState);
     DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
+
+    /// Font
+
+    {
+#if 1
+        char buff[MAX_PATH_COUNT + 64];
+        // This should show basically all Unicode characters
+        snprintf(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
+        io.Fonts->AddFontFromFileTTF(buff, 18.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
+#else
+        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f, nullptr,
+                                     io.Fonts->GetGlyphRangesDefault());
+#endif
+    }
+
     //GetFFMpegPath(&pathInfo); TODO?
 
     // TODO: The following path processing code is maybe a bit too defensive, we could just exit the
@@ -2291,50 +2355,56 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     /// Temp dir
 
-    DWORD result = GetTempPathA(MAX_PATH_COUNT, appState.tempDir);
+    wchar tempDir[MAX_PATH_COUNT];
+    DWORD result = GetTempPathW(MAX_PATH_COUNT, tempDir);
     if (!result) {
         DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
         // Use exe dir as working dir...
-        snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+        snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
     }
     // No space!
-    else if (result >= sizeof(appState.tempDir)) {
+    else if (result >= ARR_COUNT(appState.tempDir)) {
         DEBUG_PRINT("No space for temp dir, using exe dir...\n");
-        snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+        snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
     } else {
         // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
-        ASSERT(result > 0 && result < sizeof(appState.tempDir));
-        if (result > 0 && result < sizeof(appState.tempDir)) {
-            appState.tempDir[result - 1] = '\0';
+        ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
+        if (result > 0 && result < ARR_COUNT(appState.tempDir)) {
+            //appState.tempDir[result - 1] = '\0';
+            UTF16To8(tempDir, appState.tempDir);
         } else {
-            snprintf(appState.tempDir, sizeof(appState.tempDir), "%s", appState.exeDir);
+            snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
         }
     }
 
     /// Config file
     // TODO: exact same code as above
 
-    char appData[MAX_PATH_COUNT];
-    if (!SUCCEEDED(SHGetFolderPathA(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
+    wchar appData[MAX_PATH_COUNT];
+    if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
         DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
-        snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
+        snprintf(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
     } else {
-        DEBUG_PRINTF("Found appdata %s\n", appData);
-        snprintf(appState.appData, sizeof(appState.appData), "%s\\%s", appData, COMPRESSOR_NAME);
-        BOOL created = CreateDirectoryA(appState.appData, nullptr);
+        // Also very cumbersome to print wide strings, have to use %ls
+        // probably doesn't even work correctly for special characters...
+        DEBUG_PRINTF("Found appdata %ls\n", appData);
+        swprintf(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
+        BOOL created = CreateDirectoryW(appData, nullptr);
+        // This is extremely annoying to do having to convert all the time
+        UTF16To8(appData, appState.appData);
         if (!created) {
             DWORD err = GetLastError();
             if (err != ERROR_ALREADY_EXISTS) {
                 DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                              "there. Using exe dir...\n");
-                snprintf(appState.appData, sizeof(appState.appData), "%s", appState.exeDir);
-                ASSERT(false);
+                snprintf(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
+                INVALID_CODE_PATH;
             }
         }
     }
 
     char configPath[MAX_PATH_COUNT];
-    snprintf(configPath, sizeof(configPath), "%s\\easycompressor.cfg", appState.appData);
+    snprintf(configPath, ARR_COUNT(configPath), "%s\\easycompressor.cfg", appState.appData);
 
     bool32 loaded = LoadConfigFile(hWnd, &appState, configPath);
     if (!loaded) {
@@ -2351,11 +2421,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     }
 
     // imgui.ini also to same path
-    snprintf(configPath, sizeof(configPath), "%s\\imgui.ini", appState.appData);
+    snprintf(configPath, ARR_COUNT(configPath), "%s\\imgui.ini", appState.appData);
     io.IniFilename = configPath;
 
     // TODO: support package managers so read from PATH
-    snprintf(appState.ffmpegPath, sizeof(appState.ffmpegPath), "vendor\\ffmpeg\\");
+    snprintf(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "vendor\\ffmpeg\\");
 
     // Start worker thread
     HANDLE workerThread = CreateThread(nullptr, 0, WorkerThread, &appState, 0, nullptr);
@@ -2370,13 +2440,16 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 #if COMPRESSOR_DEV
     DEBUG_PRINT("Adding test files at startup...\n");
 
-    char testPath1[MAX_PATH_COUNT];
-    char testPath2[MAX_PATH_COUNT];
-    char testPath3[MAX_PATH_COUNT];
+    wchar testPath1[MAX_PATH_COUNT];
+    wchar testPath2[MAX_PATH_COUNT];
+    wchar testPath3[MAX_PATH_COUNT];
 
-    snprintf(testPath1, sizeof(testPath1), "%s\\..\\test_file1_large.mp4", appState.exeDir);
-    snprintf(testPath2, sizeof(testPath2), "%s\\..\\test_file2.mp4", appState.exeDir);
-    snprintf(testPath3, sizeof(testPath3), "%s\\..\\testi_file_small.mp4", appState.exeDir);
+    wchar exeDir[ARR_COUNT(appState.exeDir)];
+    UTF8To16(appState.exeDir, exeDir);
+
+    swprintf(testPath1, ARR_COUNT(testPath1), L"%ls\\..\\test_file1_large.mp4", exeDir);
+    swprintf(testPath2, ARR_COUNT(testPath2), L"%ls\\..\\test_file2.mp4", exeDir);
+    swprintf(testPath3, ARR_COUNT(testPath3), L"%ls\\..\\testi_file_small.mp4", exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);
@@ -2409,9 +2482,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         currentCounter = frameStart;
 
         MSG msg;
-        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
-            DispatchMessageA(&msg);
+            DispatchMessageW(&msg);
             if (msg.message == WM_QUIT) {
                 running = false;
             }
@@ -2461,11 +2534,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             io.ClearInputKeys();
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            appState.uiState.escJustPressed = true;
-        } else {
-            appState.uiState.escJustPressed = false;
-        }
+        appState.uiState.escJustPressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 
         /// Draw
 
@@ -2545,6 +2614,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     CleanupDeviceD3D();
     DestroyWindow(hWnd);
-    UnregisterClassA(windowClass.lpszClassName, windowClass.hInstance);
+    UnregisterClassW(windowClass.lpszClassName, windowClass.hInstance);
     return 0;
 }

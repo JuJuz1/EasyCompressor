@@ -21,25 +21,32 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
+typedef wchar_t wchar;
+
 // clang-format off
 
 // clang-tidy NOLINTBEGIN
 #if COMPRESSOR_DEBUG
 #    define ASSERT(expr) if (!(expr)) { *(static_cast<int*>(nullptr)) = 0; }
+#    define INVALID_CODE_PATH ASSERT(false) // TODO: Crashes for now
 #else
 #    define ASSERT(expr)
+#    define INVALID_CODE_PATH
 #endif
 // clang-tidy NOLINTEND
 
-#define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+#define ARR_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
 
 // clang-format on
 
+/**
+ * Returns number of bytes, NOT the number of "real" characters
+ */
 static i32
 StrLength(const char* str) {
     ASSERT(str);
 
-    i32 len{};
+    i32 len = 0;
     while (*str++) {
         len++;
     }
@@ -47,18 +54,34 @@ StrLength(const char* str) {
     return len;
 }
 
-//static bool32
-//StrEqual(const char* a, const char* b) {
-//    ASSERT(a && b);
+/**
+ * Returns number of code units (elements), DON'T use for file I/O
+ * Same as StrLength but for UTF-16, doesn't return the "real" count of perceived characters
+ */
+static i32
+StrLengthW(const wchar* str) {
+    ASSERT(str);
 
-//    while (*a && *b) {
-//        if (*a != *b) {
-//            return false;
-//        }
+    i32 len = 0;
+    while (*str++) {
+        len++;
+    }
 
-//        ++a;
-//        ++b;
-//    }
+    return len;
+}
 
-//    return (*a == '\0') && (*b == '\0');
-//}
+static bool32
+StrEqual(const char* a, const char* b) {
+    ASSERT(a && b);
+
+    while (*a && *b) {
+        if (*a != *b) {
+            return false;
+        }
+
+        ++a;
+        ++b;
+    }
+
+    return *a == *b;
+}
