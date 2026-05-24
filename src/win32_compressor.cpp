@@ -241,7 +241,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // device paths at all here!
 
 #ifdef UNICODE
-    ASSERT(appState->defaultOutputFolder[0] != '\0');
+    ASSERT(appState->outputFolder[0] != '\0');
 
     // Find last path separator in input (UTF-8 safe because '\' and '/' are ASCII)
     const char* lastSlash = nullptr;
@@ -254,8 +254,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // TODO: this probably suffices as we don't have to do any string processing really
     // Just always use the output folder specified and remove the checkbox
     if (lastSlash) {
-        snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->defaultOutputFolder,
-                 lastSlash);
+        snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
     } else {
         ASSERT(false);
     }
@@ -273,8 +272,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // Don't fail, but construct a default path without the extension but with _compressed
     if (!lastDot) {
         DEBUG_PRINT("Couldn't find file extension, constructed default path!\n");
-        if (appState->useDefaultOutputFolder) {
-            ASSERT(appState->defaultOutputFolder[0] != '\0');
+        if (appState->useoutputFolder) {
+            ASSERT(appState->outputFolder[0] != '\0');
             const char* lastSlash = nullptr;
             for (const char* scan = j->input; *scan; ++scan) {
                 if (*scan == PATH_SEP) {
@@ -283,8 +282,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
             }
 
             if (lastSlash) {
-                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed",
-                         appState->defaultOutputFolder, lastSlash);
+                snprintf(j->output, sizeof(j->output), "%s\\%s_compressed", appState->outputFolder,
+                         lastSlash);
             } else {
                 // This kind of should never happen
                 // TODO: fallback to using the default input path just like when no default output
@@ -315,8 +314,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
         CopyMemory(base, j->input, baseLen);
         base[baseLen] = '\0';
 
-        if (appState->useDefaultOutputFolder) {
-            ASSERT(appState->defaultOutputFolder[0] != '\0');
+        if (appState->useoutputFolder) {
+            ASSERT(appState->outputFolder[0] != '\0');
             const char* lastSlash = nullptr;
             for (const char* scan = base; *scan; ++scan) {
                 if (*scan == PATH_SEP) {
@@ -326,7 +325,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
 
             if (lastSlash) {
                 snprintf(j->output, sizeof(j->output), "%s\\%s_compressed%s",
-                         appState->defaultOutputFolder, lastSlash, lastDot);
+                         appState->outputFolder, lastSlash, lastDot);
             } else {
                 ASSERT(false);
             }
@@ -339,6 +338,14 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
 }
 
 static void
+SetPopupError(AppState* appState, const char* error) {
+    UIState* uiState = &appState->uiState;
+    uiState->showError = true;
+    ASSERT(StrLength(error) < ARR_COUNT(uiState->errorMsg));
+    snprintf(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), "%s", error);
+}
+
+static void
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
@@ -348,16 +355,21 @@ AddJob(AppState* appState, const wchar* path) {
     // Reject inputs from default output folder to avoid name conflicts
     // TODO: Other approaches?
 
+    // TODO: consider writing tests for this and ConstructPathsForJob
+    // Would make testing different unicode strings easier
+
     wchar pathW[MAX_PATH_COUNT];
-    CopyMemory(pathW, path, ARR_COUNT(pathW) * sizeof(wchar));
+    CopyMemory(pathW, path, sizeof(pathW));
     // We can assume the path always ends with a filename
     // This function also removes a folder name if its the last "element" in the path
-    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW) * sizeof(wchar));
+    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
 
     char copy[MAX_PATH_COUNT];
     UTF16To8(pathW, copy);
-    if (StrEqual(copy, appState->defaultOutputFolder)) {
+    if (StrEqual(copy, appState->outputFolder)) {
         DEBUG_PRINTF("Tried to input from default output folder %s\n", copy);
+        SetPopupError(appState, "Don't input files from the output folder!\n"
+                                "This is to avoid name conflicts");
         return;
     }
 
@@ -1129,7 +1141,7 @@ SaveOutputPathToConfig(AppState* appState, const char* path) {
 }
 
 static void
-PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
+PickoutputFolder(HWND hWnd, AppState* appState) {
     BROWSEINFOW bi = {};
     bi.hwndOwner = hWnd;
     bi.lpszTitle = L"Select output folder";
@@ -1140,14 +1152,14 @@ PickDefaultOutputFolder(HWND hWnd, AppState* appState) {
     if (result) {
         wchar buffer[MAX_PATH_COUNT] = {};
         if (SHGetPathFromIDListW(result, buffer)) {
-            //CopyMemory(appState->defaultOutputFolder, buffer, MAX_PATH_COUNT);
-            UTF16To8(buffer, appState->defaultOutputFolder);
+            //CopyMemory(appState->outputFolder, buffer, MAX_PATH_COUNT);
+            UTF16To8(buffer, appState->outputFolder);
             // This overwrites the selected value always
             // I think it's the most expected approach as if the user selects a new output path it
             // should be automatically be activated
-            appState->useDefaultOutputFolder = true;
-            DEBUG_PRINTF("Picked new default output path: %s\n", appState->defaultOutputFolder);
-            SaveOutputPathToConfig(appState, appState->defaultOutputFolder);
+            //appState->useoutputFolder = true;
+            DEBUG_PRINTF("Picked new default output path: %s\n", appState->outputFolder);
+            SaveOutputPathToConfig(appState, appState->outputFolder);
         } else {
             DEBUG_PRINT("Couldn't get selected default folder path!\n");
         }
@@ -1380,27 +1392,27 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, 10.0f);
 
-    ImGui::TextUnformatted("Default output folder:");
+    ImGui::TextUnformatted("Output folder:");
 
     ImGui::SameLine();
-    if (appState->defaultOutputFolder[0] == '\0') {
+    if (appState->outputFolder[0] == '\0') {
         ImGui::TextUnformatted("No default folder selected");
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
 
         // TODO: easily configurable if needed
         const f32 maxWidth = 550.0f;
-        f32 requiredWidth = ImGui::CalcTextSize(appState->defaultOutputFolder).x;
+        f32 requiredWidth = ImGui::CalcTextSize(appState->outputFolder).x;
         requiredWidth = ClampF32(requiredWidth, 0.0f, maxWidth);
 
         ImGui::PushItemWidth(requiredWidth);
-        ImGui::Selectable(appState->defaultOutputFolder, false, 0, ImVec2(requiredWidth, 0.0f));
+        ImGui::Selectable(appState->outputFolder, false, 0, ImVec2(requiredWidth, 0.0f));
         ImGui::PopItemWidth();
         ImGui::PopStyleColor();
 
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            ImGui::Text(appState->defaultOutputFolder);
+            ImGui::Text(appState->outputFolder);
             ImGui::TextUnformatted("Click to change folder\n"
                                    "Middle click to open folder in explorer\n"
                                    "Right click for more options");
@@ -1408,13 +1420,13 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-            PickDefaultOutputFolder(hWnd, appState);
+            PickoutputFolder(hWnd, appState);
             ImGui::GetIO().ClearInputMouse();
         } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-            OpenInExplorer(hWnd, appState->defaultOutputFolder);
+            OpenInExplorer(hWnd, appState->outputFolder);
         } else if (ImGui::BeginPopupContextItem("default_folder_menu")) {
             if (ImGui::MenuItem("Open folder in explorer...")) {
-                OpenInExplorer(hWnd, appState->defaultOutputFolder);
+                OpenInExplorer(hWnd, appState->outputFolder);
             }
 
             ImGui::EndPopup();
@@ -1422,7 +1434,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     }
 
     //ImGui::SameLine();
-    //ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useDefaultOutputFolder));
+    //ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useoutputFolder));
 
     for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];
@@ -1476,10 +1488,11 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     f32 rowHeight = ImGui::GetFrameHeightWithSpacing() * 2.0f;
     f32 footerHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f;
 
-    ImVec2 tableSize(0.0f, ImClamp(headerHeight + rowHeight * appState->jobCount,
-                                   0.0f, //ImGui::GetContentRegionAvail().y - footerHeight, make the
-                                         // table full window height accounting for footer
-                                   ImGui::GetContentRegionAvail().y - footerHeight));
+    ImVec2 tableSize(0.0f,
+                     ImClamp(headerHeight + (rowHeight * static_cast<f32>(appState->jobCount)),
+                             0.0f, //ImGui::GetContentRegionAvail().y - footerHeight, make the
+                                   // table full window height accounting for footer
+                             ImGui::GetContentRegionAvail().y - footerHeight));
 
     if (ImGui::BeginTable("jobs", 6,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
@@ -1813,15 +1826,22 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     //ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
     //                        ImVec2(0.5f, 0.5f));
+
+    // Declare popups
+
     if (ImGui::BeginPopupModal("HelpAboutPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextUnformatted(COMPRESSOR_NAME);
         ImGui::Separator();
 
-        ImGui::TextUnformatted("Built with");
+        ImGui::TextUnformatted("Built with:");
         ImGui::SameLine();
         ImGui::TextLinkOpenURL("ImGui", "https://github.com/ocornut/imgui");
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Source:");
+        ImGui::SameLine();
+        ImGui::TextLinkOpenURL("EasyCompressor", "https://github.com/JuJuz1/EasyCompressor");
 
         ImGui::Text("Max length for input/output paths is %d", MAX_PATH_COUNT);
         ImGui::TextUnformatted("Small target sizes (below 10 MB) might result in the\ncompressed "
@@ -1834,9 +1854,27 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::EndPopup();
     }
 
+    if (ImGui::BeginPopupModal("ErrorPopup", nullptr,
+                               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextUnformatted(uiState->errorMsg);
+        if (ImGui::Button("OK") || uiState->escJustPressed) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // Handle popups
+
     if (uiState->helpAboutClicked) {
         ImGui::OpenPopup("HelpAboutPopup");
         uiState->helpAboutClicked = false;
+    }
+
+    if (uiState->showError) {
+        ImGui::OpenPopup("ErrorPopup");
+        uiState->showError = false;
     }
 }
 
@@ -2230,8 +2268,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
                     if (valid) {
                         DEBUG_PRINTF("Using output path: %s\n", outputPath);
-                        snprintf(appState->defaultOutputFolder,
-                                 ARR_COUNT(appState->defaultOutputFolder), outputPath);
+                        snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder),
+                                 outputPath);
                     } else {
                         DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
                     }
@@ -2250,19 +2288,19 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
     // Having no output path is NOT considered a failure
     // We just use the default User/Documents/EasyCompressor
-    if (appState->defaultOutputFolder[0] == '\0') {
+    if (appState->outputFolder[0] == '\0') {
         wchar outputFolder[MAX_PATH_COUNT];
         if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
             DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
             // Use exe dir as working dir...
-            snprintf(appState->defaultOutputFolder, ARR_COUNT(appState->defaultOutputFolder), "%s",
+            snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
                      appState->exeDir);
         } else {
             DEBUG_PRINTF("Found documents %ls\n", outputFolder);
             swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
             // It's okay to fail silently
             BOOL created = CreateDirectoryW(outputFolder, nullptr);
-            UTF16To8(outputFolder, appState->defaultOutputFolder);
+            UTF16To8(outputFolder, appState->outputFolder);
             if (!created) {
                 DWORD err = GetLastError();
                 if (err != ERROR_ALREADY_EXISTS) {
@@ -2270,15 +2308,15 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
                     ASSERT(false);
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
-                    snprintf(appState->defaultOutputFolder,
-                             ARR_COUNT(appState->defaultOutputFolder), "%s", appState->exeDir);
+                    snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                             appState->exeDir);
                 }
             }
         }
     }
 
     // I guess this for now as the default
-    appState->useDefaultOutputFolder = true;
+    //appState->useOutputFolder = true;
 
     // Having no codecs is NOT considered a failure
     // Having no default codec is also NOT considered a failure
@@ -2401,6 +2439,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     {
 #if 1
         char buff[MAX_PATH_COUNT + 64];
+        // This should show basically all Unicode characters
         snprintf(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
         io.Fonts->AddFontFromFileTTF(buff, 18.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
 #else
@@ -2596,11 +2635,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             io.ClearInputKeys();
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            appState.uiState.escJustPressed = true;
-        } else {
-            appState.uiState.escJustPressed = false;
-        }
+        appState.uiState.escJustPressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 
         /// Draw
 
