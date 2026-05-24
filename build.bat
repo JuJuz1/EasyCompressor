@@ -38,7 +38,7 @@ if !config! == debug (
 
 echo !defines!
 echo !flags!
-set flags=!defines! !flags!
+set flagsCombined=!defines! !flags!
 
 rem TODO: take a look at /FIXED
 rem TODO: examine flags that might make Microsoft Defender flag as a virus
@@ -51,9 +51,9 @@ set dxLibraries=d3d11.lib dxgi.lib d3dcompiler.lib
 
 set buildFailed=0
 
-if exist *.pdb del /q *.pdb
+if exist *.pdb del /q win32_compressor.pdb
 
-cl !flags! ../src/win32_compressor.cpp /I ../src /I ../vendor/imgui ^
+cl !flagsCombined! ../src/win32_compressor.cpp /I ../src /I ../vendor/imgui ^
 /link !linkerFlags! !win32Libraries! !dxLibraries!
 
 if ERRORLEVEL 1 (
@@ -74,3 +74,40 @@ if !buildFailed! NEQ 0 (
 ) else (
     echo [32m[1mBuild succeeded[0m[1m !DATE! !NOW!
 )
+echo.
+
+pushd build
+
+rem Tests
+if "!config!" == "debug" (
+    set argMode=%1
+) else (
+    set argMode=%2
+)
+
+if "!argMode!" == "test" (
+    echo Building tests...
+    set defines=!defines! -DCOMPRESSOR_TESTS=1
+    echo !defines!
+    echo !flags!
+    set flagsCombined=!defines! !flags!
+
+    cl !flagsCombined! /wd4505 ../src/compressor_tests.cpp /I ../src /I ../vendor ^
+    /link /SUBSYSTEM:CONSOLE
+    set NOW=!TIME:~0,8!
+    if ERRORLEVEL 1 (
+        echo [31m[1mtests.cpp failed[0m[1m !DATE! !NOW!
+        set buildFailed=1
+    ) else (
+        echo Running tests...
+        compressor_tests.exe --no-intro
+        if ERRORLEVEL 1 (
+            echo [31m[1mTests failed[0m[1m !DATE! !NOW!
+            set buildFailed=1
+        ) else (
+            echo [32m[1mTests passed[0m[1m !DATE! !NOW!
+        )
+    )
+)
+
+popd

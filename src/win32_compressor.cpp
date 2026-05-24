@@ -43,18 +43,22 @@
 #    endif
 #endif
 
-#include "imgui_draw.cpp"
-#include "imgui_tables.cpp"
-#include "imgui_widgets.cpp"
+#if !COMPRESSOR_TESTS
+#    include "imgui_draw.cpp"
+#    include "imgui_tables.cpp"
+#    include "imgui_widgets.cpp"
 
-#include "imgui.cpp"
+#    include "imgui.cpp"
 
-#include "backends/imgui_impl_dx11.cpp"
-#include "backends/imgui_impl_win32.cpp"
+#    include "backends/imgui_impl_dx11.cpp"
+#    include "backends/imgui_impl_win32.cpp"
 
 //#include "backends/imgui_impl_dx11.h"
 //#include "backends/imgui_impl_win32.h"
 //#include "imgui.h"
+#else
+#    include <shellapi.h>
+#endif
 
 #include "compressor.h"
 
@@ -1112,15 +1116,11 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // Multiple files
     while (*file) {
         wchar fullW[MAX_PATH_COUNT];
-        swprintf(fullW, L"%s\\%s", dir, file);
+        swprintf(fullW, ARR_COUNT(fullW), L"%s\\%s", dir, file);
         AddJob(appState, fullW);
         file += StrLengthW(file) + 1;
     }
 }
-
-/// -----------------------------------------------------------------------------
-/// ImGui
-/// -----------------------------------------------------------------------------
 
 static const char*
 JobStatusText(JobStatus s) {
@@ -1176,6 +1176,322 @@ CancelBatch(AppState* appState) {
     DEBUG_PRINT("Cancel pressed!\n");
 }
 
+static bool32
+CreateDefaultConfigFile(const char* path) {
+    DEBUG_PRINT("Trying to create default config file...\n");
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
+    HANDLE file =
+        CreateFileW(pathW, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (!file) {
+        DEBUG_PRINT("Couldn't create default config file!\n");
+        return false;
+    }
+
+    char content[] =
+        "# IMPORTANT: H264 and H265 are the only codecs currently supported\n"
+        "# Use the app to set the default output path, it's much easier that way!\n\n"
+
+        "# You can specify up to 5 preset sizes the app loads when it starts, only the "
+        "first 5 are used\n"
+        "# Append ! after a value to signal it as the default value\n"
+        "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
+        "range are clamped\n\n"
+        "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n\n"
+        "[Codecs]\nh264 !\nh265\n\n"
+        "# Has to be an absolute path\n"
+        "[OutputPath]\n";
+
+    DWORD written = 0;
+    // Don't write null terminator
+    WriteFile(file, content, ARR_COUNT(content) - 1, &written, nullptr);
+    if (written == 0) {
+        DEBUG_PRINT("Couldn't write to default config file!\n");
+        CloseHandle(file);
+        return false;
+    }
+
+    DEBUG_PRINT("Created default config file!\n");
+    CloseHandle(file);
+    return true;
+}
+
+/**
+ * Return value depends solely on the target sizes!
+ */
+static bool32
+LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
+    wchar pathW[MAX_PATH_COUNT];
+    UTF8To16(path, pathW);
+    HANDLE file = CreateFileW(pathW, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (!file) {
+        DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
+        return false;
+    }
+
+    char buf[512 + MAX_PATH_COUNT];
+    DWORD bytesRead = 0;
+
+    if (!ReadFile(file, buf, ARR_COUNT(buf), &bytesRead, nullptr) || bytesRead == 0) {
+        DEBUG_PRINT("Couldn't read file!\n");
+        CloseHandle(file);
+        return false;
+    }
+
+    buf[bytesRead] = '\0';
+
+    i32 sizesParsed = 0;
+    bool32 inSizes = false;
+    bool32 inCodecs = false;
+    bool32 inOutputPath = false;
+    bool32 foundDefaultForSize = false;
+    bool32 foundDefaultForCodec = false;
+    const char* p = buf;
+
+    i32 sizesCount = ARR_COUNT(appState->targetSizes);
+
+    // Currently handles whitespace and other characters at the end only
+    // I think this is fine
+    while (*p) {
+        while (*p == ' ' || *p == '\r' || *p == '\n') {
+            ++p;
+        }
+
+        if (!*p) {
+            break;
+        }
+
+        // Comments
+        if (*p == '#') {
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            continue;
+        }
+
+        // Section
+        if (*p == '[') {
+            inSizes = (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
+                       p[6] == ']');
+
+            inCodecs = (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
+                        p[6] == 's' && p[7] == ']');
+
+            inOutputPath = (p[1] == 'O' && p[2] == 'u' && p[3] == 't' && p[4] == 'p' &&
+                            p[5] == 'u' && p[6] == 't' && p[7] == 'P' && p[8] == 'a' &&
+                            p[9] == 't' && p[10] == 'h' && p[11] == ']');
+
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            continue;
+        }
+
+        if (inSizes) {
+            f32 value = StrToF32(p);
+            if (value != 0.0f || (*p >= '0' && *p <= '9')) {
+                f32 oldValue = value;
+                value = ClampF32(value, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
+                if (oldValue != value) {
+                    DEBUG_PRINTF("Clamped %.2f to %.2f\n", oldValue, value);
+                }
+
+                if (sizesParsed == sizesCount) {
+                    DEBUG_PRINTF("Tried to parse more than %d sizes, SUCCESS\n", sizesCount);
+                    break;
+                }
+
+                appState->targetSizes[sizesParsed++] = value;
+                DEBUG_PRINTF("Parsed size: %.2f\n", value);
+
+                if (!foundDefaultForSize) {
+                    const char* start = p;
+                    while (*p && *p != '\n') {
+                        ++p;
+                    }
+
+                    bool32 isDefault = false;
+                    for (const char* t = start; t < p; ++t) {
+                        if (*t == '!') {
+                            isDefault = true;
+                            break;
+                        }
+                    }
+
+                    if (isDefault) {
+                        foundDefaultForSize = true;
+                        DEBUG_PRINTF("Found default target size of %.2f!\n", value);
+                        appState->defaultTargetSize = value;
+                    }
+                }
+            }
+        } else if (inCodecs) {
+            if (!foundDefaultForCodec) {
+                const char* start = p;
+                while (*p && *p != '\n') {
+                    ++p;
+                }
+
+                bool32 isDefault = false;
+                for (const char* t = start; t < p; ++t) {
+                    if (*t == '!') {
+                        isDefault = true;
+                        break;
+                    }
+                }
+
+                // Skip leading whitespace
+                const char* end = p;
+                const char* t = start;
+                while (t < end && *t == ' ') {
+                    ++t;
+                }
+
+                Codec codec = Codec::NONE;
+                if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' && t[3] == '4') {
+                    codec = Codec::H264;
+                } else if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' &&
+                           t[3] == '5') {
+                    codec = Codec::H265;
+                }
+
+                if (codec != Codec::NONE && isDefault) {
+                    foundDefaultForCodec = true;
+                    DEBUG_PRINTF("Found default codec %s!\n", CodecText_(codec));
+                    appState->defaultCodec = codec;
+                }
+            }
+        } else if (inOutputPath) {
+            const char* start = p;
+            while (*p && *p != '\n') {
+                ++p;
+            }
+
+            const char* end = p;
+            const char* t = start;
+            while (t < end && *t == ' ') {
+                ++t;
+            }
+
+            char outputPath[MAX_PATH_COUNT];
+            i32 len = static_cast<i32>(end - start);
+
+            if (len > 0 && len < MAX_PATH_COUNT) {
+                CopyMemory(outputPath, start, len);
+                outputPath[len] = '\0';
+
+                wchar outputPathW[ARR_COUNT(outputPath)];
+                UTF8To16(outputPath, outputPathW);
+
+                if (PathIsRelativeW(outputPathW)) {
+                    DEBUG_PRINTF("Tried to use relative path %s\n", outputPath);
+                } else {
+                    DWORD attrs = GetFileAttributesW(outputPathW);
+                    bool32 valid = false;
+
+                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                        valid = true;
+                    } else {
+                        if (CreateDirectoryW(outputPathW, nullptr)) {
+                            valid = true;
+                        } else {
+                            DWORD err = GetLastError();
+                            if (err == ERROR_ALREADY_EXISTS) {
+                                valid = true;
+                            }
+                        }
+                    }
+
+                    if (valid) {
+                        DEBUG_PRINTF("Using output path: %s\n", outputPath);
+                        snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder),
+                                 outputPath);
+                    } else {
+                        DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
+                    }
+                }
+            } else {
+                DEBUG_PRINTF("Invalid output path length: %d\n", len);
+            }
+        }
+
+        while (*p && *p != '\n') {
+            ++p;
+        }
+    }
+
+    CloseHandle(file);
+
+    // Having no output path is NOT considered a failure
+    // We just use the default User/Documents/EasyCompressor
+    if (appState->outputFolder[0] == '\0') {
+        wchar outputFolder[MAX_PATH_COUNT];
+        if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
+            DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
+            // Use exe dir as working dir...
+            snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                     appState->exeDir);
+        } else {
+            DEBUG_PRINTF("Found documents %ls\n", outputFolder);
+            swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
+            // It's okay to fail silently
+            BOOL created = CreateDirectoryW(outputFolder, nullptr);
+            UTF16To8(outputFolder, appState->outputFolder);
+            if (!created) {
+                DWORD err = GetLastError();
+                if (err != ERROR_ALREADY_EXISTS) {
+                    // This shouldn't ever happen though
+                    INVALID_CODE_PATH;
+                    DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
+                                 "there. Using exe dir...\n");
+                    snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                             appState->exeDir);
+                }
+            }
+        }
+    }
+
+    // I guess this for now as the default
+    //appState->useOutputFolder = true;
+
+    // Having no codecs is NOT considered a failure
+    // Having no default codec is also NOT considered a failure
+    // This is just for the simplicity and differs heavily from the logic of target sizes
+    // Simply: if we don't have the default set via "!", we assign a default
+    // TODO: maybe revise the logic here, see above
+    if (appState->defaultCodec == Codec::NONE) {
+        DEBUG_PRINT("No codec specified, assigning default!\n");
+        appState->defaultCodec = Codec::H264;
+    }
+
+    // User added some sizes but not the full amount
+    // We consider having 0 target sizes a failure
+    if (sizesParsed > 0 && sizesParsed < sizesCount) {
+        DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
+        if (!foundDefaultForSize) {
+            // Set the first user-supplied size as the default
+            f32 defaultSize = appState->targetSizes[0];
+            DEBUG_PRINTF("Didn't find default, setting it to %.2f\n", defaultSize, 0);
+            appState->defaultTargetSize = defaultSize;
+        }
+
+        sizesParsed = sizesCount;
+    }
+
+    bool32 success = sizesParsed == sizesCount;
+    return success;
+}
+
+// Tests don't need this stuff
+#if !COMPRESSOR_TESTS
+
+/// -----------------------------------------------------------------------------
+/// ImGui
+/// -----------------------------------------------------------------------------
+
 static void
 DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta) {
     UIState* uiState = &appState->uiState;
@@ -1225,9 +1541,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     bool32 cancelled = _InterlockedCompareExchange(&appState->cancelRequested, 0, 0);
     bool32 noJobs = appState->jobCount == 0;
 
-#if COMPRESSOR_DEV
+#    if COMPRESSOR_DEV
     ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
-#endif
+#    endif
 
     const f32 sliderWidth = 190 * scale;
 
@@ -1936,315 +2252,6 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-static bool32
-CreateDefaultConfigFile(const char* path) {
-    DEBUG_PRINT("Trying to create default config file...\n");
-    wchar pathW[MAX_PATH_COUNT];
-    UTF8To16(path, pathW);
-    HANDLE file =
-        CreateFileW(pathW, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (!file) {
-        DEBUG_PRINT("Couldn't create default config file!\n");
-        return false;
-    }
-
-    char content[] =
-        "# IMPORTANT: H264 and H265 are the only codecs currently supported\n"
-        "# Use the app to set the default output path, it's much easier that way!\n\n"
-
-        "# You can specify up to 5 preset sizes the app loads when it starts, only the "
-        "first 5 are used\n"
-        "# Append ! after a value to signal it as the default value\n"
-        "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
-        "range are clamped\n\n"
-        "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n\n"
-        "[Codecs]\nh264 !\nh265\n\n"
-        "# Has to be an absolute path\n"
-        "[OutputPath]\n";
-
-    DWORD written = 0;
-    // Don't write null terminator
-    WriteFile(file, content, ARR_COUNT(content) - 1, &written, nullptr);
-    if (written == 0) {
-        DEBUG_PRINT("Couldn't write to default config file!\n");
-        CloseHandle(file);
-        return false;
-    }
-
-    DEBUG_PRINT("Created default config file!\n");
-    CloseHandle(file);
-    return true;
-}
-
-/**
- * Return value depends solely on the target sizes!
- */
-static bool32
-LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
-    wchar pathW[MAX_PATH_COUNT];
-    UTF8To16(path, pathW);
-    HANDLE file = CreateFileW(pathW, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (!file) {
-        DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
-        return false;
-    }
-
-    char buf[512 + MAX_PATH_COUNT];
-    DWORD bytesRead = 0;
-
-    if (!ReadFile(file, buf, ARR_COUNT(buf), &bytesRead, nullptr) || bytesRead == 0) {
-        DEBUG_PRINT("Couldn't read file!\n");
-        CloseHandle(file);
-        return false;
-    }
-
-    buf[bytesRead] = '\0';
-
-    i32 sizesParsed = 0;
-    bool32 inSizes = false;
-    bool32 inCodecs = false;
-    bool32 inOutputPath = false;
-    bool32 foundDefaultForSize = false;
-    bool32 foundDefaultForCodec = false;
-    const char* p = buf;
-
-    i32 sizesCount = ARR_COUNT(appState->targetSizes);
-
-    // Currently handles whitespace and other characters at the end only
-    // I think this is fine
-    while (*p) {
-        while (*p == ' ' || *p == '\r' || *p == '\n') {
-            ++p;
-        }
-
-        if (!*p) {
-            break;
-        }
-
-        // Comments
-        if (*p == '#') {
-            while (*p && *p != '\n') {
-                ++p;
-            }
-
-            continue;
-        }
-
-        // Section
-        if (*p == '[') {
-            inSizes = (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
-                       p[6] == ']');
-
-            inCodecs = (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
-                        p[6] == 's' && p[7] == ']');
-
-            inOutputPath = (p[1] == 'O' && p[2] == 'u' && p[3] == 't' && p[4] == 'p' &&
-                            p[5] == 'u' && p[6] == 't' && p[7] == 'P' && p[8] == 'a' &&
-                            p[9] == 't' && p[10] == 'h' && p[11] == ']');
-
-            while (*p && *p != '\n') {
-                ++p;
-            }
-
-            continue;
-        }
-
-        if (inSizes) {
-            f32 value = StrToF32(p);
-            if (value != 0.0f || (*p >= '0' && *p <= '9')) {
-                f32 oldValue = value;
-                value = ClampF32(value, MIN_TARGET_SIZE, MAX_TARGET_SIZE);
-                if (oldValue != value) {
-                    DEBUG_PRINTF("Clamped %.2f to %.2f\n", oldValue, value);
-                }
-
-                if (sizesParsed == sizesCount) {
-                    DEBUG_PRINTF("Tried to parse more than %d sizes, SUCCESS\n", sizesCount);
-                    break;
-                }
-
-                appState->targetSizes[sizesParsed++] = value;
-                DEBUG_PRINTF("Parsed size: %.2f\n", value);
-
-                if (!foundDefaultForSize) {
-                    const char* start = p;
-                    while (*p && *p != '\n') {
-                        ++p;
-                    }
-
-                    bool32 isDefault = false;
-                    for (const char* t = start; t < p; ++t) {
-                        if (*t == '!') {
-                            isDefault = true;
-                            break;
-                        }
-                    }
-
-                    if (isDefault) {
-                        foundDefaultForSize = true;
-                        DEBUG_PRINTF("Found default target size of %.2f!\n", value);
-                        appState->defaultTargetSize = value;
-                    }
-                }
-            }
-        } else if (inCodecs) {
-            if (!foundDefaultForCodec) {
-                const char* start = p;
-                while (*p && *p != '\n') {
-                    ++p;
-                }
-
-                bool32 isDefault = false;
-                for (const char* t = start; t < p; ++t) {
-                    if (*t == '!') {
-                        isDefault = true;
-                        break;
-                    }
-                }
-
-                // Skip leading whitespace
-                const char* end = p;
-                const char* t = start;
-                while (t < end && *t == ' ') {
-                    ++t;
-                }
-
-                Codec codec = Codec::NONE;
-                if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' && t[3] == '4') {
-                    codec = Codec::H264;
-                } else if ((end - t) >= 4 && t[0] == 'h' && t[1] == '2' && t[2] == '6' &&
-                           t[3] == '5') {
-                    codec = Codec::H265;
-                }
-
-                if (codec != Codec::NONE && isDefault) {
-                    foundDefaultForCodec = true;
-                    DEBUG_PRINTF("Found default codec %s!\n", CodecText_(codec));
-                    appState->defaultCodec = codec;
-                }
-            }
-        } else if (inOutputPath) {
-            const char* start = p;
-            while (*p && *p != '\n') {
-                ++p;
-            }
-
-            const char* end = p;
-            const char* t = start;
-            while (t < end && *t == ' ') {
-                ++t;
-            }
-
-            char outputPath[MAX_PATH_COUNT];
-            i32 len = static_cast<i32>(end - start);
-
-            if (len > 0 && len < MAX_PATH_COUNT) {
-                CopyMemory(outputPath, start, len);
-                outputPath[len] = '\0';
-
-                wchar outputPathW[ARR_COUNT(outputPath)];
-                UTF8To16(outputPath, outputPathW);
-
-                if (PathIsRelativeW(outputPathW)) {
-                    DEBUG_PRINTF("Tried to use relative path %s\n", outputPath);
-                } else {
-                    DWORD attrs = GetFileAttributesW(outputPathW);
-                    bool32 valid = false;
-
-                    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-                        valid = true;
-                    } else {
-                        if (CreateDirectoryW(outputPathW, nullptr)) {
-                            valid = true;
-                        } else {
-                            DWORD err = GetLastError();
-                            if (err == ERROR_ALREADY_EXISTS) {
-                                valid = true;
-                            }
-                        }
-                    }
-
-                    if (valid) {
-                        DEBUG_PRINTF("Using output path: %s\n", outputPath);
-                        snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder),
-                                 outputPath);
-                    } else {
-                        DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
-                    }
-                }
-            } else {
-                DEBUG_PRINTF("Invalid output path length: %d\n", len);
-            }
-        }
-
-        while (*p && *p != '\n') {
-            ++p;
-        }
-    }
-
-    CloseHandle(file);
-
-    // Having no output path is NOT considered a failure
-    // We just use the default User/Documents/EasyCompressor
-    if (appState->outputFolder[0] == '\0') {
-        wchar outputFolder[MAX_PATH_COUNT];
-        if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
-            DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
-            // Use exe dir as working dir...
-            snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
-                     appState->exeDir);
-        } else {
-            DEBUG_PRINTF("Found documents %ls\n", outputFolder);
-            swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
-            // It's okay to fail silently
-            BOOL created = CreateDirectoryW(outputFolder, nullptr);
-            UTF16To8(outputFolder, appState->outputFolder);
-            if (!created) {
-                DWORD err = GetLastError();
-                if (err != ERROR_ALREADY_EXISTS) {
-                    // This shouldn't ever happen though
-                    INVALID_CODE_PATH;
-                    DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
-                                 "there. Using exe dir...\n");
-                    snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
-                             appState->exeDir);
-                }
-            }
-        }
-    }
-
-    // I guess this for now as the default
-    //appState->useOutputFolder = true;
-
-    // Having no codecs is NOT considered a failure
-    // Having no default codec is also NOT considered a failure
-    // This is just for the simplicity and differs heavily from the logic of target sizes
-    // Simply: if we don't have the default set via "!", we assign a default
-    // TODO: maybe revise the logic here, see above
-    if (appState->defaultCodec == Codec::NONE) {
-        DEBUG_PRINT("No codec specified, assigning default!\n");
-        appState->defaultCodec = Codec::H264;
-    }
-
-    // User added some sizes but not the full amount
-    // We consider having 0 target sizes a failure
-    if (sizesParsed > 0 && sizesParsed < sizesCount) {
-        DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
-        if (!foundDefaultForSize) {
-            // Set the first user-supplied size as the default
-            f32 defaultSize = appState->targetSizes[0];
-            DEBUG_PRINTF("Didn't find default, setting it to %.2f\n", defaultSize, 0);
-            appState->defaultTargetSize = defaultSize;
-        }
-
-        sizesParsed = sizesCount;
-    }
-
-    bool32 success = sizesParsed == sizesCount;
-    return success;
-}
-
 int WINAPI
 WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unused*/) {
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -2254,14 +2261,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     // | DEV | DEBUG
     char windowName[ARR_COUNT(COMPRESSOR_NAME) + 6 + 8];
     snprintf(windowName, ARR_COUNT(windowName), COMPRESSOR_NAME);
-#if COMPRESSOR_DEV
+#    if COMPRESSOR_DEV
     snprintf(windowName, ARR_COUNT(windowName), "%s | DEV", windowName);
 //windowName += L" | DEV";
-#endif
-#if COMPRESSOR_DEBUG
+#    endif
+#    if COMPRESSOR_DEBUG
     snprintf(windowName, ARR_COUNT(windowName), "%s | DEBUG", windowName);
 //windowName += L" | DEBUG";
-#endif
+#    endif
 
     wchar windowNameW[ARR_COUNT(windowName)];
     UTF8To16(windowName, windowNameW);
@@ -2336,15 +2343,15 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     /// Font
 
     {
-#if 1
+#    if 1
         char buff[MAX_PATH_COUNT + 64];
         // This should show basically all Unicode characters
         snprintf(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
         io.Fonts->AddFontFromFileTTF(buff, 18.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
-#else
+#    else
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f, nullptr,
                                      io.Fonts->GetGlyphRangesDefault());
-#endif
+#    endif
     }
 
     //GetFFMpegPath(&pathInfo); TODO?
@@ -2437,7 +2444,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     appState.workerThread = workerThread;
 
 // Test data
-#if COMPRESSOR_DEV
+#    if COMPRESSOR_DEV
     DEBUG_PRINT("Adding test files at startup...\n");
 
     wchar testPath1[MAX_PATH_COUNT];
@@ -2454,7 +2461,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);
     AddJob(&appState, testPath3);
-#endif
+#    endif
 
     /// Performance statistics
     LARGE_INTEGER freqCounter;
@@ -2599,13 +2606,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         gSwap->Present(1, 0); // (1, 0) -> vsync, otherwise we hog the cpu quite a lot
         auto presentEnd = GetWallClock();
         f32 presentMs = GetMsElapsed(presentStart, presentEnd);
-#if 0
+#    if 0
         PRINTF("frame work: %.5f (avg: %.5f) ms | msg: %.5f ms | ui: %.5f ms | render: "
                "%.5f ms | present: %.5f ms\nFPS: %.0f | cycles: %.4f M\n",
                frameWorkMs, frameWorkAvgMs, msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
-#else
+#    else
         (void)(msgMs, uiMs, renderMs, presentMs, fps, cycleElapsedM);
-#endif
+#    endif
     }
 
     ImGui_ImplDX11_Shutdown();
@@ -2617,3 +2624,5 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     UnregisterClassW(windowClass.lpszClassName, windowClass.hInstance);
     return 0;
 }
+
+#endif

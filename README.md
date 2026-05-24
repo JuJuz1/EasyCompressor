@@ -39,6 +39,10 @@ Run x64 Native Tools Command Prompt for VS (version optional)
 build.bat
 ```
 
+### Tests
+
+[Doctest](https://github.com/doctest/doctest), version used 2.5.2. Put doctest.h into "vendor"
+
 ## Notes / limits
 
 - If the requested size is too small for the video's length (would force video bitrate < 50 kbps),
