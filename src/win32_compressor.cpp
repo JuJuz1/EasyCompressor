@@ -260,6 +260,17 @@ SetPopupError(AppState* appState, const char* error) {
     snprintf(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), "%s", error);
 }
 
+static bool32
+IsPathFromOutputFolder(AppState* appState, const wchar* path) {
+    wchar pathW[MAX_PATH_COUNT];
+    CopyMemory(pathW, path, sizeof(pathW));
+    // This removes the file or a folder, so any last "element" of the path
+    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
+    char copy[MAX_PATH_COUNT];
+    UTF16To8(pathW, copy);
+    return StrEqual(copy, appState->outputFolder);
+}
+
 static void
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
@@ -270,19 +281,8 @@ AddJob(AppState* appState, const wchar* path) {
     // Reject inputs from default output folder to avoid name conflicts
     // TODO: Other approaches?
 
-    // TODO: consider writing tests for this and ConstructPathsForJob
-    // Would make testing different unicode strings easier
-
-    wchar pathW[MAX_PATH_COUNT];
-    CopyMemory(pathW, path, sizeof(pathW));
-    // We can assume the path always ends with a filename
-    // This function also removes a folder name if its the last "element" in the path
-    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
-
-    char copy[MAX_PATH_COUNT];
-    UTF16To8(pathW, copy);
-    if (StrEqual(copy, appState->outputFolder)) {
-        DEBUG_PRINTF("Tried to input from default output folder %s\n", copy);
+    if (IsPathFromOutputFolder(appState, path)) {
+        DEBUG_PRINTF("Tried to input from default output folder\n");
         SetPopupError(appState, "Don't input files from the output folder!\n"
                                 "This is to avoid name conflicts");
         return;

@@ -93,13 +93,14 @@ if "!argMode!" == "test" (
     set flagsCombined=!defines! !flags!
 
     cl !flagsCombined! /wd4505 ../src/compressor_tests.cpp /I ../src /I ../vendor ^
-    /link /SUBSYSTEM:CONSOLE
+    /link /SUBSYSTEM:CONSOLE !win32Libraries!
     set NOW=!TIME:~0,8!
     if ERRORLEVEL 1 (
         echo [31m[1mtests.cpp failed[0m[1m !DATE! !NOW!
         set buildFailed=1
     ) else (
         echo Running tests...
+        rem --success, show all INFO output
         compressor_tests.exe --no-intro
         if ERRORLEVEL 1 (
             echo [31m[1mTests failed[0m[1m !DATE! !NOW!
