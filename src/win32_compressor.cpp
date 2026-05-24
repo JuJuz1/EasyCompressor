@@ -24,9 +24,10 @@
 #    include <windows.h>
 
 #    include <cderr.h>       // CommDlg errors
-#    include <commdlg.h>     // OFN, GetSaveFileNameA
-#    include <shlobj_core.h> // SHGetFolderPathA, SHBrowseForFolderA
-#    include <shlwapi.h>     // PathFileExistsA
+#    include <commdlg.h>     // OFN, GetSaveFileNameW
+#    include <pathcch.h>     // PathCchRemoveFileSpec
+#    include <shlobj_core.h> // SHGetFolderPathW, SHBrowseForFolderW
+#    include <shlwapi.h>     // PathFileExistsW
 
 // Windows...
 #    ifdef ERROR
@@ -236,9 +237,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     UTF16To8(path, j->input);
     //snprintf(j->input, sizeof(j->input), "%s", s.c_str());
 
-    // TODO: maybe just use a dedicated output folder and use the input name as output
-    // that way we wouldn't have to do this string processing nonsense
-    // Also should probably use the Windows API for path processing as we don't handle UNC paths or
+    // TODO: should probably use the Windows API for path processing as we don't handle UNC paths or
     // device paths at all here!
 
 #ifdef UNICODE
@@ -254,7 +253,6 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
 
     // TODO: this probably suffices as we don't have to do any string processing really
     // Just always use the output folder specified and remove the checkbox
-    // TODO: handle the case where someone inputs a file from the output folder, reject it probably
     if (lastSlash) {
         snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->defaultOutputFolder,
                  lastSlash);
@@ -347,6 +345,22 @@ AddJob(AppState* appState, const wchar* path) {
         return;
     }
 
+    // Reject inputs from default output folder to avoid name conflicts
+    // TODO: Other approaches?
+
+    wchar pathW[MAX_PATH_COUNT];
+    CopyMemory(pathW, path, ARR_COUNT(pathW) * sizeof(wchar));
+    // We can assume the path always ends with a filename
+    // This function also removes a folder name if its the last "element" in the path
+    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW) * sizeof(wchar));
+
+    char copy[MAX_PATH_COUNT];
+    UTF16To8(pathW, copy);
+    if (StrEqual(copy, appState->defaultOutputFolder)) {
+        DEBUG_PRINTF("Tried to input from default output folder %s\n", copy);
+        return;
+    }
+
     UIJob* j = &appState->jobs[appState->jobCount];
     *j = {};
 
@@ -364,7 +378,7 @@ AddJob(AppState* appState, const wchar* path) {
     }
 
     // Publish the new job at the end
-    _InterlockedExchange(&appState->jobCount, appState->jobCount + 1);
+    _InterlockedIncrement(&appState->jobCount);
     DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
                  appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
 }
@@ -1407,8 +1421,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
     }
 
-    ImGui::SameLine();
-    ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useDefaultOutputFolder));
+    //ImGui::SameLine();
+    //ImGui::Checkbox("Use?", reinterpret_cast<bool*>(&appState->useDefaultOutputFolder));
 
     for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
         f32 size = appState->targetSizes[i];

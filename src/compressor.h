@@ -44,7 +44,7 @@ static i32
 StrLength(const char* str) {
     ASSERT(str);
 
-    i32 len{};
+    i32 len = 0;
     while (*str++) {
         len++;
     }
@@ -53,13 +53,14 @@ StrLength(const char* str) {
 }
 
 /**
- * Returns number of code units, DON'T use for file I/O
+ * Returns number of code units (elements), DON'T use for file I/O
+ * Same as StrLength but for UTF-16, doesn't return the "real" count of perceived characters
  */
 static i32
 StrLengthW(const wchar* str) {
     ASSERT(str);
 
-    i32 len{};
+    i32 len = 0;
     while (*str++) {
         len++;
     }
@@ -67,18 +68,18 @@ StrLengthW(const wchar* str) {
     return len;
 }
 
-//static bool32
-//StrEqual(const char* a, const char* b) {
-//    ASSERT(a && b);
+static bool32
+StrEqual(const char* a, const char* b) {
+    ASSERT(a && b);
 
-//    while (*a && *b) {
-//        if (*a != *b) {
-//            return false;
-//        }
+    while (*a && *b) {
+        if (*a != *b) {
+            return false;
+        }
 
-//        ++a;
-//        ++b;
-//    }
+        ++a;
+        ++b;
+    }
 
-//    return (*a == '\0') && (*b == '\0');
-//}
+    return *a == *b;
+}
