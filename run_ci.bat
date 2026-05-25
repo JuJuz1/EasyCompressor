@@ -1,2 +1,2 @@
 @echo off
-act -P windows-latest=-self-hosted
+act -P windows-2025-vs2026=-self-hosted
