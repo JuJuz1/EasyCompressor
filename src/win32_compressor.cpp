@@ -271,11 +271,11 @@ IsPathFromOutputFolder(AppState* appState, const wchar* path) {
     return StrEqual(copy, appState->outputFolder);
 }
 
-static void
+static bool32
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
-        return;
+        return false;
     }
 
     // Reject inputs from default output folder to avoid name conflicts
@@ -285,7 +285,7 @@ AddJob(AppState* appState, const wchar* path) {
         DEBUG_PRINTF("Tried to input from default output folder\n");
         SetPopupError(appState, "Don't input files from the output folder!\n"
                                 "This is to avoid name conflicts");
-        return;
+        return false;
     }
 
     UIJob* j = &appState->jobs[appState->jobCount];
@@ -302,12 +302,14 @@ AddJob(AppState* appState, const wchar* path) {
         j->inputFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
     } else {
         DEBUG_PRINT("Failed to get file size!\n");
+        INVALID_CODE_PATH;
     }
 
     // Publish the new job at the end
     _InterlockedIncrement(&appState->jobCount);
     DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
                  appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
+    return true;
 }
 
 static void
@@ -1116,7 +1118,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // Multiple files
     while (*file) {
         wchar fullW[MAX_PATH_COUNT];
-        swprintf(fullW, ARR_COUNT(fullW), L"%s\\%s", dir, file);
+        swprintf(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
         AddJob(appState, fullW);
         file += StrLengthW(file) + 1;
     }

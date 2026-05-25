@@ -19,6 +19,7 @@ rem /FAs /Fm, .asm and .map
 rem /LTCG link time optimization, not really used for unity builds I suppose
 rem not used: /Zc:__cplusplus
 
+rem remove debug from release
 set defines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_DEBUG=1
 set flags=/W4 /FC /Oi /EHa- /GR- /GS /std:c++20 /utf-8 /nologo
 

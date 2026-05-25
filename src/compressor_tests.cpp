@@ -1,8 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 // https://github.com/doctest/doctest/blob/master/doc/markdown/benchmarks.md#cost-of-an-assertion-macro
-#define DOCTEST_CONFIG_SUPER_FAST_ASSERTS        // Speed!!!
-#define DOCTEST_CONFIG_TREAT_CHAR_STAR_AS_STRING // For printing the strings out
+#define DOCTEST_CONFIG_SUPER_FAST_ASSERTS                 // Speed!!!
+#define DOCTEST_CONFIG_TREAT_CHAR_STAR_AS_STRING          // For printing the strings out
+#define DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS // To use: REQUIRE
 #include "doctest.h"
 
 #include "win32_compressor.cpp"
@@ -55,12 +56,12 @@ TEST_CASE("UTF8 round trip") {
 }
 
 TEST_CASE("UTF16 round trip") {
-    const wchar* strW = GENERATE(
-        L"Easy Compressor is here!", L"äöå", L"C:\\Users\\Andy\\Desktop\\test_file – kopöäl.mp4",
-        L"", L"ascii only", L"mixed äöå and ascii", L"∞ ≠ ≤ ≥ ± √ π Σ Δ",
-        L"– — “quotes” ‘single’ … • ™ © ®", L"γειά σου κόσμε", L"你好世界", L"안녕하세요 세계",
-        L"مرحبا بالعالم", L"שלום עולם", L"😈 👩 🚀 some emojis",
-        L"👨‍👩‍👧‍👦 🏳️‍🌈 👍🏻", L"☢ ☣ ⚠ ♫ ❤");
+    const wchar* strW =
+        GENERATE(L"Easy Compr!", L"äöå", L"C:\\Users\\Andy\\Desktop\\test_file – kopöäl.mp4", L"",
+                 L"ascii only", L"mixed äöå and ascii", L"∞ ≠ ≤ ≥ ± √ π Σ Δ",
+                 L"– — “quotes” ‘single’ … • ™ © ®", L"γειά σου κόσμε", L"你好世界",
+                 L"안녕하세요 세계", L"مرحبا بالعالم", L"שלום עולם", L"😈 👩 🚀 some emojis",
+                 L"👨‍👩‍👧‍👦 🏳️‍🌈 👍🏻", L"☢ ☣ ⚠ ♫ ❤");
 
     char str[MAX_PATH_COUNT];
     UTF16To8(strW, str);
@@ -98,7 +99,7 @@ TEST_CASE_FIXTURE(AppStateFixture, "ConstructPathsForJob works correctly") {
     CHECK(StrEqual(j.output, tc.exp));
 }
 
-TEST_CASE_FIXTURE(AppStateFixture, "IsPathFromOutputFolder") {
+TEST_CASE_FIXTURE(AppStateFixture, "IsPathFromOutputFolder works correctly") {
     struct TC {
         const wchar* input;
         bool32 exp;
@@ -114,4 +115,87 @@ TEST_CASE_FIXTURE(AppStateFixture, "IsPathFromOutputFolder") {
     INFO("input:    ", inputUtf8);
     INFO("expected: ", tc.exp);
     CHECK_EQ(IsPathFromOutputFolder(&appState, tc.input), tc.exp);
+}
+
+// Temp file for AddJob
+struct TempFileFixture {
+    // TODO: test paths greater than MAX_PATH: 260 and current MAX_PATH_COUNT
+    wchar dir[MAX_PATH_COUNT];
+    wchar path[MAX_PATH_COUNT];
+
+    TempFileFixture() {
+        i32 val = GetTempPathW(ARR_COUNT(dir), dir);
+        REQUIRE(val != 0);
+        dir[val - 1] = '\0'; // Remove trailing slash...
+        //CreateDirectoryW(dir, nullptr);
+
+        swprintf(path, ARR_COUNT(path), L"%ls\\test_file.mp4", dir);
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        REQUIRE(file != INVALID_HANDLE_VALUE);
+
+        char data[4096] = {};
+        DWORD written = 0;
+
+        BOOL ok = WriteFile(file, data, sizeof(data), &written, nullptr);
+        REQUIRE(ok);
+        REQUIRE(written == ARR_COUNT(data));
+        CloseHandle(file);
+    }
+
+    ~TempFileFixture() {
+        DeleteFileW(path);
+        //RemoveDirectoryW(dir);
+    }
+};
+
+struct AddJobFixture : AppStateFixture, TempFileFixture {};
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size") {
+    CAPTURE(appState);
+    bool32 ok = AddJob(&appState, path);
+    CHECK(ok);
+    CHECK(appState.jobCount == 1);
+    CHECK(appState.jobs[0].inputFileSize > 0.0f);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob fails at MAX_JOBS") {
+    appState.jobCount = MAX_JOBS;
+    bool32 ok = AddJob(&appState, path);
+    CHECK(!ok);
+    CHECK(appState.jobCount == MAX_JOBS);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
+    appState.jobCount = MAX_JOBS - 1;
+    bool32 ok = AddJob(&appState, path);
+    CHECK(ok);
+    CHECK(appState.jobCount == MAX_JOBS);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
+    CHECK(AddJob(&appState, path));
+    CHECK(AddJob(&appState, path));
+    CHECK(AddJob(&appState, path));
+
+    CHECK(appState.jobCount == 3);
+
+    CHECK(appState.jobs[0].status == JobStatus::QUEUED);
+    CHECK(appState.jobs[1].status == JobStatus::QUEUED);
+    CHECK(appState.jobs[2].status == JobStatus::QUEUED);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
+    char pathUtf8[MAX_PATH_COUNT];
+    char dirUtf8[MAX_PATH_COUNT];
+    UTF16To8(path, pathUtf8);
+    UTF16To8(dir, dirUtf8);
+    INFO(pathUtf8);
+
+    snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "%s", dirUtf8);
+    INFO(appState.outputFolder);
+
+    bool32 ok = AddJob(&appState, path);
+    CHECK(!ok);
+    CHECK(appState.jobCount == 0);
 }
