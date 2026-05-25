@@ -1,0 +1,25 @@
+# To run locally:
+# act -P windows-latest=-self-hosted
+# Worked fine
+
+name: Run tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Build and run only tests
+      shell: cmd
+      run: build.bat test-only
