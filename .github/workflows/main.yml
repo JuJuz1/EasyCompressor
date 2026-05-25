@@ -23,6 +23,9 @@ jobs:
       with:
         arch: x64
 
+    - name: Get toolset info
+      run: cl
+
     - name: Build and run only tests
       shell: cmd
       run: build.bat test-only
