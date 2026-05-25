@@ -1,0 +1,32 @@
+# To run locally:
+# act -P windows-2025-vs2026=-self-hosted
+# run_ci.bat
+# Worked fine
+
+name: Run tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025-vs2026
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup MSVC
+    # TODO: Check version and explore updated versions
+    # Specifically for using VS 2026
+      uses: ilammy/msvc-dev-cmd@v1.13.0
+      with:
+        arch: x64
+
+    # 19.44.35227 currently (25-5-2026)
+    - name: Get toolset info
+      run: cl
+
+    - name: Build and run only tests
+      shell: cmd
+      run: build.bat test-only

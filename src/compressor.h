@@ -70,6 +70,9 @@ StrLengthW(const wchar* str) {
     return len;
 }
 
+/**
+ * Inspects the bytes in order
+ */
 static bool32
 StrEqual(const char* a, const char* b) {
     ASSERT(a && b);

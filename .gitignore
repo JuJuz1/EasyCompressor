@@ -58,7 +58,11 @@ dkms.conf
 build/
 
 # Vendor
-vendor/
+vendor/*
+# include doctest and font
+!vendor/doctest.h
+!vendor/DOCTEST_LICENSE
+!vendor/NotoSans-Regular.ttf
 
 # ffmpeg logs
 *.log
