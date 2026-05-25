@@ -174,15 +174,17 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
-    CHECK(AddJob(&appState, path));
-    CHECK(AddJob(&appState, path));
-    CHECK(AddJob(&appState, path));
+    // TODO: this fails if we start to reject duplicate input
+    i32 count = 3;
+    REQUIRE(count < MAX_JOBS);
+    for (i32 i = 0; i < count; ++i) {
+        CHECK(AddJob(&appState, path));
+    }
 
-    CHECK(appState.jobCount == 3);
-
-    CHECK(appState.jobs[0].status == JobStatus::QUEUED);
-    CHECK(appState.jobs[1].status == JobStatus::QUEUED);
-    CHECK(appState.jobs[2].status == JobStatus::QUEUED);
+    CHECK(appState.jobCount == count);
+    for (i32 i = 0; i < count; ++i) {
+        CHECK(appState.jobs[i].status == JobStatus::QUEUED);
+    }
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {

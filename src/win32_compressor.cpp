@@ -26,6 +26,7 @@
 #    include <cderr.h>       // CommDlg errors
 #    include <commdlg.h>     // OFN, GetSaveFileNameW
 #    include <pathcch.h>     // PathCchRemoveFileSpec
+#    include <shellapi.h>    // DragQueryFileW, ShellExecuteW etc.
 #    include <shlobj_core.h> // SHGetFolderPathW, SHBrowseForFolderW
 #    include <shlwapi.h>     // PathFileExistsW
 
@@ -56,8 +57,6 @@
 //#include "backends/imgui_impl_dx11.h"
 //#include "backends/imgui_impl_win32.h"
 //#include "imgui.h"
-#else
-#    include <shellapi.h>
 #endif
 
 #include "compressor.h"
@@ -277,6 +276,8 @@ AddJob(AppState* appState, const wchar* path) {
         DEBUG_PRINT("Jobs full!\n");
         return false;
     }
+
+    // TODO: reject duplicate files?
 
     // Reject inputs from default output folder to avoid name conflicts
     // TODO: Other approaches?
