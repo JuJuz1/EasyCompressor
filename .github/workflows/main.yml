@@ -1,5 +1,6 @@
 # To run locally:
 # act -P windows-latest=-self-hosted
+# run_ci.bat
 # Worked fine
 
 name: Run tests
@@ -16,7 +17,9 @@ jobs:
     - uses: actions/checkout@v6
 
     - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
+    # TODO: Check version and explore updated versions
+    # Specifically for using VS 2026
+      uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: x64
 

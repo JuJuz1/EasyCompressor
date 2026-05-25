@@ -18,9 +18,8 @@ Version used: 8.1
 
 The easiest way to get FFmpeg on Windows: from the git master or release builds section of
 https://www.gyan.dev/ffmpeg/builds/ Download a full_build of any kind, such as
-ffmpeg-2026-04-26-git-4867d251ad-full_build.7z. Make a folder next to compress.exe named "vendor"
-and inside that named "ffmpeg". Then copy all the contents of the downloaded zip "bin" folder (10
-items) to "vendor/ffmpeg"
+ffmpeg-2026-04-26-git-4867d251ad-full_build.7z. Make a folder inside named "ffmpeg" inside "vendor".
+Then copy all the contents of the downloaded zip "bin" folder (10 items) to "vendor/ffmpeg"
 
 ### ImGui
 
@@ -41,7 +40,7 @@ build.bat
 
 ### Tests
 
-[Doctest](https://github.com/doctest/doctest), version used 2.5.2. Put doctest.h into "vendor"
+[Doctest](https://github.com/doctest/doctest), version used 2.5.2. Included in the repo already
 
 ## Notes / limits
 
