@@ -57,6 +57,8 @@ struct UIJob {
 
 #define TARGET_SIZES_COUNT 5
 
+#define CONFIG_FILE_MAX_SIZE 1024 + MAX_PATH_COUNT
+
 // Mainly for popup dialogs
 struct UIState {
     char errorMsg[128]; // Buffer for different error messages

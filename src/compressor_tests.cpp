@@ -20,10 +20,10 @@ CANDIDATES TO TEST:
     - GetExeDirectory
 */
 
-struct AppStateFixture {
+struct AddJobAppStateFixture {
     AppState appState = {};
 
-    AppStateFixture() {
+    AddJobAppStateFixture() {
         // Other stuff?
         snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "C:\\output");
     }
@@ -72,7 +72,7 @@ TEST_CASE("UTF16 round trip") {
     CHECK(StrEqual(str, str2));
 }
 
-TEST_CASE_FIXTURE(AppStateFixture, "ConstructPathsForJob works correctly") {
+TEST_CASE_FIXTURE(AddJobAppStateFixture, "ConstructPathsForJob works correctly") {
     struct TC {
         const wchar* input;
         const char* exp;
@@ -99,7 +99,7 @@ TEST_CASE_FIXTURE(AppStateFixture, "ConstructPathsForJob works correctly") {
     CHECK(StrEqual(j.output, tc.exp));
 }
 
-TEST_CASE_FIXTURE(AppStateFixture, "IsPathFromOutputFolder works correctly") {
+TEST_CASE_FIXTURE(AddJobAppStateFixture, "IsPathFromOutputFolder works correctly") {
     struct TC {
         const wchar* input;
         bool32 exp;
@@ -149,7 +149,7 @@ struct TempFileFixture {
     }
 };
 
-struct AddJobFixture : AppStateFixture, TempFileFixture {};
+struct AddJobFixture : AddJobAppStateFixture, TempFileFixture {};
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size") {
     CAPTURE(appState);
@@ -200,4 +200,188 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
     bool32 ok = AddJob(&appState, path);
     CHECK(!ok);
     CHECK(appState.jobCount == 0);
+}
+
+/// -----------------------------------------------------------------------------
+/// Config file stuff
+/// -----------------------------------------------------------------------------
+
+struct TempConfigFileFixture {
+    wchar dir[MAX_PATH_COUNT];
+    wchar path[MAX_PATH_COUNT];
+
+    TempConfigFileFixture() {
+        // TODO: duplicate code, same as above
+        i32 val = GetTempPathW(ARR_COUNT(dir), dir);
+        REQUIRE(val != 0);
+        dir[val - 1] = '\0';
+        swprintf(path, ARR_COUNT(path), L"%ls\\easycompressor.cfg", dir);
+
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        REQUIRE(file != INVALID_HANDLE_VALUE);
+
+        char data[2048] = {};
+        DWORD written = 0;
+
+        BOOL ok = WriteFile(file, data, sizeof(data), &written, nullptr);
+        REQUIRE(ok);
+        REQUIRE(written == ARR_COUNT(data));
+        CloseHandle(file);
+    }
+
+    ~TempConfigFileFixture() { DeleteFileW(path); }
+};
+
+// This tests file I/O as well
+TEST_CASE_FIXTURE(TempConfigFileFixture, "ReadConfigFile works correctly") {
+    struct TC {
+        const wchar* path;
+        bool32 exp;
+    };
+
+    char buff[CONFIG_FILE_MAX_SIZE];
+    auto tc = GENERATE(TC{ L"invalid file path", false }, TC{ path, true }, TC{ L"", false });
+
+    bool32 ok = ReadConfigFile(tc.path, buff, ARR_COUNT(buff));
+    CHECK_EQ(ok, tc.exp);
+}
+
+struct AppStateFixture {
+    AppState appState = {};
+
+    bool32
+    IsZeroed() {
+        bool32 targetSizesZeroed = true;
+        for (i32 i = 0; i < ARR_COUNT(appState.targetSizes); ++i) {
+            if (appState.targetSizes[i] != 0.0f) {
+                targetSizesZeroed = false;
+                break;
+            }
+        }
+
+        bool32 defaultTargetSizeZeroed = appState.defaultTargetSize == 0.0f;
+        bool32 codecZeroed = appState.defaultCodec == Codec::NONE;
+        bool32 outputFolderZeroed = appState.outputFolder[0] == '\0';
+
+        return targetSizesZeroed && defaultTargetSizeZeroed && codecZeroed && outputFolderZeroed;
+    }
+};
+
+// Here we don't care about the file I/O anymore, we can just use the raw content as test data
+TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips comments") {
+    struct TC {
+        const char* content;
+    };
+
+    auto tc = GENERATE(TC{ "# THis is a comment, shouldn't affect anything" },
+                       TC{ "# THis isffect anything\n"
+                           "#ASDasd"
+                           "test characters### dфывьн - --" });
+    ParseConfigBuffer(&appState, tc.content);
+    CHECK(IsZeroed());
+}
+
+TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips garbage input") {
+    struct TC {
+        const char* content;
+    };
+
+    auto tc = GENERATE(TC{ "# " },
+                       TC{ ""
+                           "ьн - --" },
+                       TC{ "" }, TC{ "    " }, TC{ "\n" }, TC{ "\r\r\n" },
+                       TC{ " #comment only junk\n !@ #$ % ^&*() _ + "
+                           "# valid comment\nrandomtextwithoutsections"
+                           "### comment\n1234567890"
+                           "#comment\n     !!!! #### ????"
+                           "" });
+    ParseConfigBuffer(&appState, tc.content);
+    CHECK(IsZeroed());
+}
+
+struct ParseConfigAppStateFixture {
+    AppState appState = {};
+};
+
+// TODO: this creates folders and deletes them
+TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly") {
+    struct TC {
+        const char* content;
+        f32 expSizes[ARR_COUNT(appState.targetSizes)];
+        Codec expCodec;
+        const char* expOutput;
+        f32 expDefaultSize;
+    };
+
+    auto tc = GENERATE(TC{ "   \n   "
+                           "# comment\n[Sizes]\n1.0"
+                           "# comment\n[Codecs]\nh264"
+                           "# junk\nrandomtext"
+                           "[OutputPath]\nC:\\EasyCompTemp",
+                           { 1.0f },
+                           Codec::NONE,
+                           "" },
+                       TC{ "# comment\n[Sizes]\n1.0\n5\n4.9 !"
+                           "# comment\n[Codecs]\nh264"
+                           "# junk\nra{},{},\n"
+                           "[OutputPath]\nC:\\EasyCompTemp",
+                           { 1.0f, 5.0f, 4.9f },
+                           Codec::NONE,
+                           "C:\\EasyCompTemp",
+                           4.9f },
+                       TC{ "[Sizes]\n#ignored\n1.0\n2.0"
+                           "тест\n# comment",
+                           { 1.0f, 2.0f },
+                           Codec::NONE,
+                           "" },
+                       TC{ "\n\n\n\r\n[Sizes]\n1.055 !\n5\n4.9 !\n4.9 !\n4.5 !\n4.22 !"
+                           "# comment\n[Codecs]\nh264"
+                           "# junk\nra{},{},\n"
+                           "[OutputPath]\nC:\\test_folder__",
+                           { 1.055f, 5.0f, 4.9f, 4.9f, 4.5f },
+                           Codec::NONE,
+                           "C:\\test_folder__",
+                           1.055f },
+                       TC{ "\n\n\n\r\n[Sizes]\n2.0 \n5\n50.2 !\n4.9 !\n4.5 !\n4.22 !"
+                           "\n\n\n[Codecs]\n\n\nh264 !\nh265"
+                           "# junk\nra{},{},\n",
+                           { 2.0f, 5.0f, 50.2f, 4.9f, 4.5f },
+                           Codec::H264,
+                           "",
+                           50.2f },
+                       TC{ "\\\n[Sizes]\n2.0s2 \n5\n51.2 !\n4000.9 !\n4.5 !\n4.22 !"
+                           "# comment\n[Codecs]\nh264\nh265 !\nhINVALID",
+                           { 2.0f, 5.0f, 51.2f, 4000.9f, 4.5f },
+                           Codec::H265,
+                           "",
+                           51.2f },
+                       // TODO: currently ParseConfigBuffer doesn't set the default target sizes
+                       // It's done at the end of LoadConfig
+                       TC{ "\\\n[Sizes]"
+                           "# comment\n[Codecs]\nhnhINVALID",
+                           {},
+                           Codec::NONE,
+                           "" });
+
+    // TODO: this creates the folder
+    ParseConfigBuffer(&appState, tc.content);
+    INFO(tc.content);
+    for (i32 i = 0; i < ARR_COUNT(appState.targetSizes); ++i) {
+        CHECK_EQ(appState.targetSizes[i], tc.expSizes[i]);
+    }
+
+    CHECK_EQ(appState.defaultTargetSize, tc.expDefaultSize);
+    CHECK_EQ(appState.defaultCodec, tc.expCodec);
+
+    INFO(appState.outputFolder);
+    INFO(tc.expOutput);
+    CHECK(StrEqual(appState.outputFolder, tc.expOutput));
+
+    // Cleanup
+    wchar outputW[MAX_PATH_COUNT];
+    UTF8To16(tc.expOutput, outputW);
+    if (PathFileExistsW(outputW)) {
+        RemoveDirectoryW(outputW);
+    }
 }

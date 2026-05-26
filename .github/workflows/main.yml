@@ -11,6 +11,7 @@ on:
 
 jobs:
   build-and-test:
+    # https://github.com/actions/runner-images
     runs-on: windows-2025-vs2026
 
     steps:
@@ -23,7 +24,7 @@ jobs:
       with:
         arch: x64
 
-    # 19.44.35227 currently (25-5-2026)
+    # 19.51.36243 currently (25-5-2026)
     - name: Get toolset info
       run: cl
 

@@ -40,7 +40,7 @@ build.bat
 
 ### Tests
 
-[Doctest](https://github.com/doctest/doctest), version used 2.5.2. Included in the repo already
+[Doctest](https://github.com/doctest/doctest) version used 2.5.2. Included in the repo already
 
 ## Notes / limits
 

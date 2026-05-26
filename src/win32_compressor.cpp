@@ -1180,12 +1180,10 @@ CancelBatch(AppState* appState) {
 }
 
 static bool32
-CreateDefaultConfigFile(const char* path) {
+CreateDefaultConfigFile(const wchar* path) {
     DEBUG_PRINT("Trying to create default config file...\n");
-    wchar pathW[MAX_PATH_COUNT];
-    UTF8To16(path, pathW);
     HANDLE file =
-        CreateFileW(pathW, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
         DEBUG_PRINT("Couldn't create default config file!\n");
         return false;
@@ -1200,6 +1198,8 @@ CreateDefaultConfigFile(const char* path) {
         "# Append ! after a value to signal it as the default value\n"
         "# Note that the min and max values are 0.5 and 5000.0. Values outside this "
         "range are clamped\n\n"
+        "# You can delete this file anytime, the app will generate a default one for you\n\n"
+
         "[Sizes]\n5.0\n10.0 !\n25.0\n50.0\n100.0\n\n"
         "[Codecs]\nh264 !\nh265\n\n"
         "# Has to be an absolute path\n"
@@ -1219,40 +1219,62 @@ CreateDefaultConfigFile(const char* path) {
     return true;
 }
 
-/**
- * Return value depends solely on the target sizes!
- */
 static bool32
-LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
-    wchar pathW[MAX_PATH_COUNT];
-    UTF8To16(path, pathW);
-    HANDLE file = CreateFileW(pathW, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+ReadConfigFile(const wchar* path, char* buff, i32 buffSize) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (!file) {
         DEBUG_PRINT("Config file didn't exist or couldn't open!\n");
         return false;
     }
 
-    char buf[512 + MAX_PATH_COUNT];
     DWORD bytesRead = 0;
 
-    if (!ReadFile(file, buf, ARR_COUNT(buf), &bytesRead, nullptr) || bytesRead == 0) {
+    if (!ReadFile(file, buff, buffSize - 1, &bytesRead, nullptr) || bytesRead == 0) {
         DEBUG_PRINT("Couldn't read file!\n");
         CloseHandle(file);
         return false;
     }
 
-    buf[bytesRead] = '\0';
+    CloseHandle(file);
+    ASSERT(static_cast<i32>(bytesRead) <= buffSize - 1);
+    buff[bytesRead] = '\0';
+    return true;
+}
 
+_NODISCARD
+static const char*
+SeekLineEnd(const char* p) {
+    while (*p && *p != '\n') {
+        ++p;
+    }
+
+    return p;
+}
+
+// TODO: very similar to StrEqual
+static bool32
+MatchSection(const char* p, const char* name) {
+    while (*p && *name) {
+        if (*p++ != *name++) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void
+ParseConfigBuffer(AppState* appState, const char* buff) {
     i32 sizesParsed = 0;
+    i32 maxSizes = ARR_COUNT(appState->targetSizes);
     bool32 inSizes = false;
     bool32 inCodecs = false;
     bool32 inOutputPath = false;
     bool32 foundDefaultForSize = false;
     bool32 foundDefaultForCodec = false;
-    const char* p = buf;
 
-    i32 sizesCount = ARR_COUNT(appState->targetSizes);
+    const char* p = buff;
 
     // Currently handles whitespace and other characters at the end only
     // I think this is fine
@@ -1276,24 +1298,20 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
         // Section
         if (*p == '[') {
-            inSizes = (p[1] == 'S' && p[2] == 'i' && p[3] == 'z' && p[4] == 'e' && p[5] == 's' &&
-                       p[6] == ']');
-
-            inCodecs = (p[1] == 'C' && p[2] == 'o' && p[3] == 'd' && p[4] == 'e' && p[5] == 'c' &&
-                        p[6] == 's' && p[7] == ']');
-
-            inOutputPath = (p[1] == 'O' && p[2] == 'u' && p[3] == 't' && p[4] == 'p' &&
-                            p[5] == 'u' && p[6] == 't' && p[7] == 'P' && p[8] == 'a' &&
-                            p[9] == 't' && p[10] == 'h' && p[11] == ']');
-
-            while (*p && *p != '\n') {
-                ++p;
-            }
-
+            inSizes = MatchSection(p, "[Sizes]");
+            inCodecs = MatchSection(p, "[Codecs]");
+            inOutputPath = MatchSection(p, "[OutputPath]");
+            p = SeekLineEnd(p);
             continue;
         }
 
         if (inSizes) {
+            if (sizesParsed == maxSizes) {
+                DEBUG_PRINTF("Tried to parse more than %d sizes\n", maxSizes);
+                p = SeekLineEnd(p);
+                continue;
+            }
+
             f32 value = StrToF32(p);
             if (value != 0.0f || (*p >= '0' && *p <= '9')) {
                 f32 oldValue = value;
@@ -1302,19 +1320,12 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
                     DEBUG_PRINTF("Clamped %.2f to %.2f\n", oldValue, value);
                 }
 
-                if (sizesParsed == sizesCount) {
-                    DEBUG_PRINTF("Tried to parse more than %d sizes, SUCCESS\n", sizesCount);
-                    break;
-                }
-
                 appState->targetSizes[sizesParsed++] = value;
                 DEBUG_PRINTF("Parsed size: %.2f\n", value);
 
                 if (!foundDefaultForSize) {
                     const char* start = p;
-                    while (*p && *p != '\n') {
-                        ++p;
-                    }
+                    p = SeekLineEnd(p);
 
                     bool32 isDefault = false;
                     for (const char* t = start; t < p; ++t) {
@@ -1334,9 +1345,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
         } else if (inCodecs) {
             if (!foundDefaultForCodec) {
                 const char* start = p;
-                while (*p && *p != '\n') {
-                    ++p;
-                }
+                p = SeekLineEnd(p);
 
                 bool32 isDefault = false;
                 for (const char* t = start; t < p; ++t) {
@@ -1369,9 +1378,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
             }
         } else if (inOutputPath) {
             const char* start = p;
-            while (*p && *p != '\n') {
-                ++p;
-            }
+            p = SeekLineEnd(p);
 
             const char* end = p;
             const char* t = start;
@@ -1421,12 +1428,21 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
             }
         }
 
-        while (*p && *p != '\n') {
-            ++p;
-        }
+        p = SeekLineEnd(p);
+    }
+}
+
+static bool32
+LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
+    char buff[CONFIG_FILE_MAX_SIZE];
+    bool32 ok = ReadConfigFile(path, buff, ARR_COUNT(buff));
+    if (!ok) {
+        return false;
     }
 
-    CloseHandle(file);
+    ParseConfigBuffer(appState, buff);
+
+    /// Fallbacks
 
     // Having no output path is NOT considered a failure
     // We just use the default User/Documents/EasyCompressor
@@ -1472,20 +1488,28 @@ LoadConfigFile(HWND hWnd, AppState* appState, const char* path) {
 
     // User added some sizes but not the full amount
     // We consider having 0 target sizes a failure
-    if (sizesParsed > 0 && sizesParsed < sizesCount) {
-        DEBUG_PRINTF("Parsed %d out of %d, meaning SUCCESS\n", sizesParsed, sizesCount);
-        if (!foundDefaultForSize) {
+    i32 sizes = 0;
+    for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
+        if (appState->targetSizes[i] != 0.0f) {
+            ++sizes;
+        }
+    }
+
+    // TODO: this is really the only failure point (when we return false)
+    if (sizes == 0) {
+        return false;
+    }
+
+    if (sizes < ARR_COUNT(appState->targetSizes)) {
+        if (appState->defaultTargetSize == 0.0f) {
             // Set the first user-supplied size as the default
             f32 defaultSize = appState->targetSizes[0];
             DEBUG_PRINTF("Didn't find default, setting it to %.2f\n", defaultSize, 0);
             appState->defaultTargetSize = defaultSize;
         }
-
-        sizesParsed = sizesCount;
     }
 
-    bool32 success = sizesParsed == sizesCount;
-    return success;
+    return true;
 }
 
 // Tests don't need this stuff
@@ -2416,17 +2440,24 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     char configPath[MAX_PATH_COUNT];
     snprintf(configPath, ARR_COUNT(configPath), "%s\\easycompressor.cfg", appState.appData);
 
-    bool32 loaded = LoadConfigFile(hWnd, &appState, configPath);
-    if (!loaded) {
-        bool32 created = CreateDefaultConfigFile(configPath);
-        if (created) {
-            DEBUG_PRINT("Loading just created config file...\n");
-            LoadConfigFile(hWnd, &appState, configPath);
+    wchar configPathW[MAX_PATH_COUNT];
+    UTF8To16(configPath, configPathW);
+    bool32 ok = LoadConfigFile(hWnd, &appState, configPathW);
+    if (!ok) {
+        bool32 configExists = PathFileExistsW(configPathW);
+        if (configExists) {
+            // TODO: show error (and prompt to delete?)
         } else {
-            DEBUG_PRINT("Fallback to using default target sizes...\n");
-            f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
-            CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
-            appState.defaultTargetSize = defaultTargetSizes[1];
+            bool32 created = CreateDefaultConfigFile(configPathW);
+            if (created) {
+                DEBUG_PRINT("Loading just created config file...\n");
+                LoadConfigFile(hWnd, &appState, configPathW);
+            } else {
+                DEBUG_PRINT("Fallback to using default target sizes...\n");
+                f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
+                CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
+                appState.defaultTargetSize = defaultTargetSizes[1];
+            }
         }
     }
 
