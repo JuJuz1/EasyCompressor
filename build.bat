@@ -130,6 +130,9 @@ if !modeTest! == 1 (
     ) else (
         echo Running tests...
         rem --success, show all INFO output
+        rem TODO: figure out a way to show total time taken for tests
+        rem probably have to introduce custom main() and measure there
+        rem --duration only shows time per test
         compressor_tests.exe --no-intro
         if ERRORLEVEL 1 (
             set buildFailed=1

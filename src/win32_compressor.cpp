@@ -249,15 +249,36 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     }
 }
 
+/**
+ * Passing nullptr clears the error
+ */
 static void
-SetPopupError(AppState* appState, const char* fmt, ...) {
+SetErrorMsg(AppState* appState, const char* fmt, ...) {
     UIState* uiState = &appState->uiState;
+    if (!fmt) {
+        uiState->showError = false;
+        return;
+    }
+
     uiState->showError = true;
 
     va_list args;
     va_start(args, fmt);
     i32 len = vsnprintf_s(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), fmt, args);
     ASSERT(len != -1 && len <= ARR_COUNT(uiState->errorMsg));
+    va_end(args);
+}
+
+static void
+SetPopupErrorMsg(AppState* appState, const char* fmt, ...) {
+    ASSERT(fmt);
+    UIState* uiState = &appState->uiState;
+    uiState->showPopupError = true;
+
+    va_list args;
+    va_start(args, fmt);
+    i32 len = vsnprintf_s(uiState->errorMsgPopup, ARR_COUNT(uiState->errorMsgPopup), fmt, args);
+    ASSERT(len != -1 && len <= ARR_COUNT(uiState->errorMsgPopup));
     va_end(args);
 }
 
@@ -922,30 +943,29 @@ StartBatch(AppState* appState) {
 // TODO: we currently don't handle the case where MAX_JOBS is hit but also some files are rejected
 // for other reasons. We only show an error based on the last error
 static void
-HandleAddJobResults(i32 rejected, AddJobResult lastErrorResult) {
+HandleAddJobResults(AppState* appState, i32 rejected, AddJobResult lastErrorResult) {
     if (rejected > 0 && lastErrorResult != AddJobResult::SUCCESS) {
         switch (lastErrorResult) {
         case AddJobResult::JOBS_FULL: {
-            SetPopupError(gAppState,
-                          "Rejected %d file(s)\n"
-                          "Max job limit of %d was reached",
-                          rejected, MAX_JOBS);
+            SetErrorMsg(appState, "Rejected %d file(s). Max job limit of %d was reached", rejected,
+                        MAX_JOBS);
         } break;
         case AddJobResult::DUPLICATE_JOB: {
-            SetPopupError(gAppState, "Rejected %d duplicate file(s)", rejected);
+            SetErrorMsg(appState, "Rejected %d duplicate file(s)", rejected);
         } break;
         case AddJobResult::JOB_FROM_OUTPUT: {
-            SetPopupError(gAppState,
-                          "Rejected %d file(s)\n"
-                          "Files from the output folder can not be used!\n"
-                          "This is to avoid name conflicts",
-                          rejected);
+            SetErrorMsg(appState,
+                        "Rejected %d file(s). Files from the output folder can not be used! This "
+                        "is to avoid name conflicts",
+                        rejected);
         } break;
         default: {
-            SetPopupError(gAppState, "Rejected %d files", rejected);
+            SetErrorMsg(appState, "Rejected %d files", rejected);
             INVALID_CODE_PATH;
         }
         }
+    } else {
+        SetErrorMsg(appState, nullptr);
     }
 }
 
@@ -1144,7 +1164,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
     ofn.lpstrDefExt = L"mp4";
 
-    if (!GetOpenFileName(&ofn)) {
+    if (!GetOpenFileNameW(&ofn)) {
         DWORD err = CommDlgExtendedError();
         DEBUG_PRINTF("CommDlgExtendedError in PickInputFiles: %u\n", err);
         return;
@@ -1183,7 +1203,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         }
     }
 
-    HandleAddJobResults(rejected, lastErrorResult);
+    HandleAddJobResults(appState, rejected, lastErrorResult);
 }
 
 static const char*
@@ -1578,6 +1598,8 @@ ClearJobs(AppState* appState) {
     _InterlockedExchange(&appState->jobCount, 0);
     // Actually don't have to since when adding a job we always clear to zero
     //ZeroMemory(appState->jobs, sizeof(appState->jobs));
+
+    SetErrorMsg(appState, nullptr);
 }
 
 // Tests don't need this stuff
@@ -1762,6 +1784,14 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         if (ImGui::Button(label, ImVec2(80 * scale, 0))) {
             *defaultTargetSize = size;
         }
+    }
+
+    if (uiState->showError) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.8f, 0.0f, 0.0f, 1.0f });
+        ImGui::Text("Latest error: %s", uiState->errorMsg);
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::TextUnformatted("");
     }
 
     /// Table
@@ -2168,8 +2198,19 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted(uiState->errorMsg);
+        ImGui::TextUnformatted(uiState->errorMsgPopup);
         if (ImGui::Button("OK") || uiState->escJustPressed) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine();
+        const char* text = "Open config folder...";
+        // Align right
+        f32 width = ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2;
+        f32 avail = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width);
+        if (ImGui::Button(text)) {
+            OpenInExplorer(hWnd, appState->appData);
             ImGui::CloseCurrentPopup();
         }
 
@@ -2183,9 +2224,9 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         uiState->helpAboutClicked = false;
     }
 
-    if (uiState->showError) {
+    if (uiState->showPopupError) {
         ImGui::OpenPopup("ErrorPopup");
-        uiState->showError = false;
+        uiState->showPopupError = false;
     }
 }
 
@@ -2327,7 +2368,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 ++rejected;
             }
 
-            HandleAddJobResults(rejected, lastErrorResult);
+            HandleAddJobResults(gAppState, rejected, lastErrorResult);
         }
 
         DragFinish(drop);
@@ -2523,9 +2564,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     if (!ok) {
         bool32 configExists = PathFileExistsW(configPathW);
         if (configExists) {
-            SetPopupError(&appState, "Config is malformed, consider fixing or deleting it\n"
-                                     "The app will generate a new one upon startup after deletion\n"
-                                     "Navigate to Help -> Open config folder...");
+            SetPopupErrorMsg(&appState,
+                             "Config is malformed, consider fixing or deleting it\n"
+                             "The app will generate a new one upon startup after deletion");
             // TODO: show error (and prompt to delete?)
         } else {
             bool32 created = CreateDefaultConfigFile(configPathW);
