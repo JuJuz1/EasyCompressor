@@ -341,7 +341,6 @@ static void
 RemoveJob(AppState* appState, i32 index) {
     ASSERT(index >= 0 && index < appState->jobCount);
     if (index < 0 || index >= appState->jobCount) {
-        // bad!
         return;
     }
 
@@ -355,21 +354,18 @@ RemoveJob(AppState* appState, i32 index) {
     _InterlockedExchange(&appState->jobCount, newJobCount);
 }
 
-static void
-MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
-    // Holy assert heaven
-    ASSERT(from != to && from >= 0 && to >= 0 && from < appState->jobCount &&
-           to < appState->jobCount);
+static bool32
+MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex = -1) {
     if (from == to || from < 0 || to < 0 || from >= appState->jobCount ||
         to >= appState->jobCount) {
-        return;
+        return false;
     }
 
     // Will hit this if we start the drag before compression starts and then drop when
     // gsqcompressing
     //ASSERT(from > highestRunningIndex && to > highestRunningIndex);
     if (from <= highestRunningIndex || to <= highestRunningIndex) {
-        return;
+        return false;
     }
 
     UIJob tmp = appState->jobs[from];
@@ -379,7 +375,7 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
     if (tmp.status == JobStatus::RUNNING_PROBE || tmp.status == JobStatus::RUNNING_COMPRESS ||
         appState->jobs[to].status == JobStatus::RUNNING_PROBE ||
         appState->jobs[to].status == JobStatus::RUNNING_COMPRESS) {
-        return;
+        return false;
     }
 
     if (from < to) {
@@ -394,6 +390,7 @@ MoveJob(AppState* appState, i32 from, i32 to, i32 highestRunningIndex) {
 
     appState->jobs[to] = tmp;
     DEBUG_PRINTF("Moved job %d to %d\n", from, to);
+    return true;
 }
 
 // Wrapper for strtod for easier usage

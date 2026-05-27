@@ -188,7 +188,6 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
-    // TODO: test adding more than MAX_JOBS
     auto result = AddJob(&appState, path);
     CHECK(result == AddJobResult::SUCCESS);
     result = AddJob(&appState, path2);
@@ -233,6 +232,53 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
 
     CHECK(result == AddJobResult::JOB_FROM_OUTPUT);
     CHECK(appState.jobCount == 0);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "MoveJob works correctly") {
+    auto result = AddJob(&appState, path);
+    REQUIRE(result == AddJobResult::SUCCESS);
+    result = AddJob(&appState, path2);
+    REQUIRE(result == AddJobResult::SUCCESS);
+    result = AddJob(&appState, path3);
+    REQUIRE(result == AddJobResult::SUCCESS);
+    REQUIRE(appState.jobCount == 3);
+
+    char pathUtf8[MAX_PATH_COUNT];
+    char path2Utf8[MAX_PATH_COUNT];
+    char path3Utf8[MAX_PATH_COUNT];
+    UTF16To8(path, pathUtf8);
+    UTF16To8(path2, path2Utf8);
+    UTF16To8(path3, path3Utf8);
+
+    // Normal operations
+    CHECK(MoveJob(&appState, 0, 2));
+    CHECK(MoveJob(&appState, 2, 0));
+    CHECK(MoveJob(&appState, 1, 2));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[2].input, path2Utf8));
+
+    CHECK(MoveJob(&appState, 2, 0));
+    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
+
+    // Invalid
+    CHECK(!MoveJob(&appState, 3, 2));
+    CHECK(!MoveJob(&appState, -2, 2));
+    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
+
+    // Highest running index
+    CHECK(!MoveJob(&appState, 0, 2, 1));
+    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
+    CHECK(MoveJob(&appState, 2, 1, 0));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+    CHECK(!MoveJob(&appState, 1, 2, 2));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
 }
 
 /// -----------------------------------------------------------------------------
