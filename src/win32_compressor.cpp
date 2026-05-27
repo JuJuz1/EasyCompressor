@@ -337,21 +337,26 @@ AddJob(AppState* appState, const wchar* path) {
     return AddJobResult::SUCCESS;
 }
 
-static void
+static bool32
 RemoveJob(AppState* appState, i32 index) {
-    ASSERT(index >= 0 && index < appState->jobCount);
+    //ASSERT(index >= 0 && index < appState->jobCount);
     if (index < 0 || index >= appState->jobCount) {
-        return;
+        return false;
     }
 
     DEBUG_PRINTF("Removed job %d\n", index);
 
     i32 newJobCount = appState->jobCount - 1;
+    ASSERT(newJobCount >= 0);
     for (i32 i = index; i < newJobCount; ++i) {
         appState->jobs[i] = appState->jobs[i + 1];
     }
 
+    // Have to clear the last as we reject duplicate input now
+    appState->jobs[newJobCount] = {};
+
     _InterlockedExchange(&appState->jobCount, newJobCount);
+    return true;
 }
 
 static bool32
@@ -926,7 +931,7 @@ StartBatch(AppState* appState) {
 // TODO: we currently don't handle the case where MAX_JOBS is hit but also some files are rejected
 // for other reasons. We only show an error based on the last error
 static void
-HandleAddJobError(i32 rejected, AddJobResult lastErrorResult) {
+HandleAddJobResults(i32 rejected, AddJobResult lastErrorResult) {
     if (rejected > 0 && lastErrorResult != AddJobResult::SUCCESS) {
         switch (lastErrorResult) {
         case AddJobResult::JOBS_FULL: {
@@ -1187,7 +1192,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         }
     }
 
-    HandleAddJobError(rejected, lastErrorResult);
+    HandleAddJobResults(rejected, lastErrorResult);
 }
 
 static const char*
@@ -1575,6 +1580,12 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
     }
 
     return true;
+}
+
+static void
+ClearJobs(AppState* appState) {
+    _InterlockedExchange(&appState->jobCount, 0);
+    ZeroMemory(appState->jobs, sizeof(appState->jobs));
 }
 
 // Tests don't need this stuff
@@ -2120,7 +2131,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     ImGui::BeginDisabled(compressing || noJobs);
     if (ImGui::Button("Clear", ImVec2(80 * scale, 0))) {
         DEBUG_PRINT("Clear\n");
-        _InterlockedExchange(&appState->jobCount, 0);
+        ClearJobs(appState);
     }
 
     ImGui::EndDisabled();
@@ -2324,7 +2335,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 ++rejected;
             }
 
-            HandleAddJobError(rejected, lastErrorResult);
+            HandleAddJobResults(rejected, lastErrorResult);
         }
 
         DragFinish(drop);

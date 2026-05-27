@@ -167,54 +167,43 @@ struct AddJobFixture : AddJobAppStateFixture, TempFileFixture {};
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size correctly") {
     CAPTURE(appState);
-    auto result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
     CHECK(appState.jobCount == 1);
     CHECK(appState.jobs[0].inputFileSize == doctest::Approx(4096 / (1024.0f * 1024.0f)));
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob fails at MAX_JOBS") {
     appState.jobCount = MAX_JOBS;
-    auto result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::JOBS_FULL);
+    CHECK(AddJob(&appState, path) == AddJobResult::JOBS_FULL);
     CHECK(appState.jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
     appState.jobCount = MAX_JOBS - 1;
-    auto result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
     CHECK(appState.jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
-    auto result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::SUCCESS);
-    result = AddJob(&appState, path2);
-    CHECK(result == AddJobResult::SUCCESS);
-    result = AddJob(&appState, path3);
-    CHECK(result == AddJobResult::SUCCESS);
-
+    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path3) == AddJobResult::SUCCESS);
     CHECK(appState.jobCount == 3);
+
     for (i32 i = 0; i < 3; ++i) {
         CHECK(appState.jobs[i].status == JobStatus::QUEUED);
     }
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects duplicate input") {
-    auto result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
 
-    result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::DUPLICATE_JOB);
-    result = AddJob(&appState, path);
-    CHECK(result == AddJobResult::DUPLICATE_JOB);
+    CHECK(AddJob(&appState, path) == AddJobResult::DUPLICATE_JOB);
+    CHECK(AddJob(&appState, path) == AddJobResult::DUPLICATE_JOB);
     CHECK(appState.jobCount == 1);
 
-    result = AddJob(&appState, path2);
-    CHECK(result == AddJobResult::SUCCESS);
-    result = AddJob(&appState, path2);
-    CHECK(result == AddJobResult::DUPLICATE_JOB);
+    CHECK(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    CHECK(AddJob(&appState, path2) == AddJobResult::DUPLICATE_JOB);
     CHECK(appState.jobCount == 2);
 }
 
@@ -228,19 +217,14 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
     snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "%s", dirUtf8);
     INFO(appState.outputFolder);
 
-    auto result = AddJob(&appState, path);
-
-    CHECK(result == AddJobResult::JOB_FROM_OUTPUT);
+    CHECK(AddJob(&appState, path) == AddJobResult::JOB_FROM_OUTPUT);
     CHECK(appState.jobCount == 0);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "MoveJob works correctly") {
-    auto result = AddJob(&appState, path);
-    REQUIRE(result == AddJobResult::SUCCESS);
-    result = AddJob(&appState, path2);
-    REQUIRE(result == AddJobResult::SUCCESS);
-    result = AddJob(&appState, path3);
-    REQUIRE(result == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
     REQUIRE(appState.jobCount == 3);
 
     char pathUtf8[MAX_PATH_COUNT];
@@ -279,6 +263,126 @@ TEST_CASE_FIXTURE(AddJobFixture, "MoveJob works correctly") {
     CHECK(!MoveJob(&appState, 1, 2, 2));
     CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
     CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "RemoveJob works correctly") {
+    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(appState.jobCount == 3);
+
+    char pathUtf8[MAX_PATH_COUNT];
+    char path2Utf8[MAX_PATH_COUNT];
+    char path3Utf8[MAX_PATH_COUNT];
+    UTF16To8(path, pathUtf8);
+    UTF16To8(path2, path2Utf8);
+    UTF16To8(path3, path3Utf8);
+
+    CHECK(RemoveJob(&appState, 1));
+    CHECK(appState.jobCount == 2);
+    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+
+    // Remove from end
+    CHECK(RemoveJob(&appState, 1));
+    CHECK(appState.jobCount == 1);
+    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
+
+    // Tests adding after removal
+    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+
+    // Invalid
+    CHECK(!RemoveJob(&appState, -1));
+    CHECK(appState.jobCount == 3);
+    CHECK(!RemoveJob(&appState, 4));
+    CHECK(appState.jobCount == 3);
+    CHECK(!RemoveJob(&appState, 3));
+    CHECK(appState.jobCount == 3);
+    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[2].input, path2Utf8));
+
+    CHECK(RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 2);
+    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, path2Utf8));
+
+    CHECK(RemoveJob(&appState, 1));
+    CHECK(appState.jobCount == 1);
+    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
+    CHECK(RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 0);
+
+    CHECK(!RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 0);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob, RemoveJob and MoveJob work correctly") {
+    char pathUtf8[MAX_PATH_COUNT];
+    char path2Utf8[MAX_PATH_COUNT];
+    char path3Utf8[MAX_PATH_COUNT];
+    UTF16To8(path, pathUtf8);
+    UTF16To8(path2, path2Utf8);
+    UTF16To8(path3, path3Utf8);
+
+    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(appState.jobCount == 3);
+    // [path, path2, path3]
+
+    // Move then remove the result
+    CHECK(MoveJob(&appState, 0, 2));
+    // [path2, path3, path]
+    CHECK(RemoveJob(&appState, 2));
+    CHECK(appState.jobCount == 2);
+    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+
+    // Re-add the removed job, check it lands at the end
+    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    CHECK(appState.jobCount == 3);
+    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+    // [path2, path3, path]
+
+    // Remove from front
+    CHECK(RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 2);
+    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
+    // [path3, path]
+
+    // Re-add path2, move it to front
+    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    CHECK(appState.jobCount == 3);
+    // [path3, path, path2]
+    CHECK(MoveJob(&appState, 2, 0));
+    // [path2, path3, path]
+    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+
+    // Remove middle, move remaining
+    CHECK(RemoveJob(&appState, 1));
+    CHECK(appState.jobCount == 2);
+    // [path2, path]
+    CHECK(MoveJob(&appState, 1, 0));
+    // [path, path2]
+    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState.jobs[1].input, path2Utf8));
+
+    // Remove down to empty
+    CHECK(RemoveJob(&appState, 0));
+    CHECK(RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 0);
+    CHECK(!RemoveJob(&appState, 0));
+    CHECK(appState.jobCount == 0);
+
+    // Re-add after empty
+    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
+    CHECK(appState.jobCount == 1);
+    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
 }
 
 /// -----------------------------------------------------------------------------
