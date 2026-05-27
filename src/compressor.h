@@ -55,7 +55,7 @@ StrLength(const char* str) {
 }
 
 /**
- * Returns number of code units (elements), DON'T use for file I/O
+ * Returns number of code units (wchar elements), DON'T use for byte counts or file I/O
  * Same as StrLength but for UTF-16, doesn't return the "real" count of perceived characters
  */
 static i32

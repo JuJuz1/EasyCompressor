@@ -61,7 +61,7 @@ struct UIJob {
 
 // Mainly for popup dialogs
 struct UIState {
-    char errorMsg[128]; // Buffer for different error messages
+    char errorMsg[256]; // Buffer for different error messages
     bool32 showError;
     bool32 helpAboutClicked;
 

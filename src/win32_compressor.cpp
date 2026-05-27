@@ -18,7 +18,6 @@
 #if COMPRESSOR_WIN32
 #    define WIN32_LEAN_AND_MEAN
 #    define PATH_SEP '\\'
-#    define PATH_SEPW L'\\'
 #    define NULL_DEV "NUL"
 
 #    include <windows.h>
@@ -45,11 +44,10 @@
 #endif
 
 #if !COMPRESSOR_TESTS
+#    include "imgui.cpp"
 #    include "imgui_draw.cpp"
 #    include "imgui_tables.cpp"
 #    include "imgui_widgets.cpp"
-
-#    include "imgui.cpp"
 
 #    include "backends/imgui_impl_dx11.cpp"
 #    include "backends/imgui_impl_win32.cpp"
@@ -252,17 +250,24 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
 }
 
 static void
-SetPopupError(AppState* appState, const char* error) {
+SetPopupError(AppState* appState, const char* fmt, ...) {
     UIState* uiState = &appState->uiState;
     uiState->showError = true;
-    ASSERT(StrLength(error) < ARR_COUNT(uiState->errorMsg));
-    snprintf(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), "%s", error);
+
+    va_list args;
+    va_start(args, fmt);
+    i32 len = vsnprintf_s(uiState->errorMsg, ARR_COUNT(uiState->errorMsg), fmt, args);
+    ASSERT(len != -1 && len <= ARR_COUNT(uiState->errorMsg));
+    va_end(args);
 }
 
 static bool32
 IsPathFromOutputFolder(AppState* appState, const wchar* path) {
+    i32 amount = StrLengthW(path);
+    ASSERT(amount >= 0 && amount < MAX_PATH_COUNT);
     wchar pathW[MAX_PATH_COUNT];
-    CopyMemory(pathW, path, sizeof(pathW));
+    // Include null term and as it's wide we have to multiply by the size
+    CopyMemory(pathW, path, (amount + 1) * sizeof(wchar));
     // This removes the file or a folder, so any last "element" of the path
     PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
     char copy[MAX_PATH_COUNT];
@@ -274,18 +279,31 @@ static bool32
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
+        // TODO: there is no error message for this currently
+        // We essentially have 3 cases:
+        // - jobs full
+        // - duplicate input
+        // - input from output folder
         return false;
     }
 
     // TODO: reject duplicate files?
+    for (i32 i = 0; i < MAX_JOBS; ++i) {
+        UIJob* job = &appState->jobs[i];
+        char buff[ARR_COUNT(job->input)];
+        UTF16To8(path, buff);
+        if (StrEqual(job->input, buff)) {
+            return false;
+        }
+    }
 
     // Reject inputs from default output folder to avoid name conflicts
     // TODO: Other approaches?
 
     if (IsPathFromOutputFolder(appState, path)) {
         DEBUG_PRINTF("Tried to input from default output folder\n");
-        SetPopupError(appState, "Don't input files from the output folder!\n"
-                                "This is to avoid name conflicts");
+        //SetPopupError(appState, "Don't input files from the output folder!\n"
+        //                        "This is to avoid name conflicts");
         return false;
     }
 
@@ -559,6 +577,7 @@ RunCompress(AppState* appState, UIJob* job) {
         DEBUG_PRINT("Target size too small for this video duration "
                     "(video bitrate would be < 50 kbps), ABORTING\n");
         // TODO: when are we going to really hit this case? remove?
+        job->status = JobStatus::ERROR;
         return;
     }
 
@@ -756,7 +775,7 @@ RunCompress(AppState* appState, UIJob* job) {
         if (!created) {
             DEBUG_PRINT("Couldn't create process ffmpeg! ABORTING!\n");
             job->status = JobStatus::ERROR;
-            //CloseHandle(readPipe);
+            CloseHandle(readPipe);
             return;
         }
 
@@ -1077,7 +1096,7 @@ PickoutputFolder(HWND hWnd, AppState* appState) {
 static void
 PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // TODO: Take care of stack size if MAX_PATH_COUNT is changed
-    wchar buffer[MAX_PATH_COUNT * MAX_JOBS] = {};
+    wchar buffer[MAX_PATH_COUNT * ARR_COUNT(appState->jobs)] = {};
 
     OPENFILENAME ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -1110,18 +1129,28 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     const wchar* dir = buffer;
     const wchar* file = buffer + ofn.nFileOffset; // Get the first file
 
+    i32 rejected = 0;
+
     // Single file
     if (*(file - 1) != L'\0') {
-        AddJob(appState, buffer);
-        return;
+        if (!AddJob(appState, buffer)) {
+            ++rejected;
+        }
+    } else {
+        // Multiple files
+        while (*file) {
+            wchar fullW[MAX_PATH_COUNT];
+            swprintf(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
+            if (!AddJob(appState, fullW)) {
+                ++rejected;
+            }
+
+            file += StrLengthW(file) + 1;
+        }
     }
 
-    // Multiple files
-    while (*file) {
-        wchar fullW[MAX_PATH_COUNT];
-        swprintf(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
-        AddJob(appState, fullW);
-        file += StrLengthW(file) + 1;
+    if (rejected > 0) {
+        SetPopupError(appState, "Rejected %d duplicate files", rejected);
     }
 }
 
@@ -2098,7 +2127,8 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
     if (ImGui::BeginPopupModal("ErrorPopup", nullptr,
                                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                   ImGuiWindowFlags_NoCollapse)) {
+                                   ImGuiWindowFlags_NoCollapse |
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted(uiState->errorMsg);
         if (ImGui::Button("OK") || uiState->escJustPressed) {
             ImGui::CloseCurrentPopup();
@@ -2226,13 +2256,13 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         UINT fileCount = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
         // TODO: validate by most common video file extensions?
         // We do allow files with no extension so probably not...
+        i32 rejected = 0;
         for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
             wchar path[MAX_PATH_COUNT];
             // Query the required character amount first, not including null terminator
             // If we don't query we have no way of deducing if the path was truncated or it's
             // exactly MAX_PATH_COUNT long
             UINT required = DragQueryFileW(drop, i, nullptr, 0);
-
             // Get the path and get the copied amount, not including null terminator
             UINT copied = DragQueryFileW(drop, i, path, ARR_COUNT(path));
 
@@ -2250,7 +2280,13 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             ASSERT(gAppState);
-            AddJob(gAppState, path);
+            if (!AddJob(gAppState, path)) {
+                ++rejected;
+            }
+
+            if (rejected > 0) {
+                SetPopupError(gAppState, "Rejected %d duplicate files", rejected);
+            }
         }
 
         DragFinish(drop);
@@ -2446,6 +2482,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     if (!ok) {
         bool32 configExists = PathFileExistsW(configPathW);
         if (configExists) {
+            SetPopupError(&appState, "Config is malformed, consider fixing or deleting it\n"
+                                     "The app will generate a new one upon startup after deletion\n"
+                                     "Navigate to Help -> Open config folder...");
             // TODO: show error (and prompt to delete?)
         } else {
             bool32 created = CreateDefaultConfigFile(configPathW);
@@ -2454,7 +2493,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
                 LoadConfigFile(hWnd, &appState, configPathW);
             } else {
                 DEBUG_PRINT("Fallback to using default target sizes...\n");
-                f32 defaultTargetSizes[5] = { 5.0f, 10.0f, 25.0, 50.0, 100.0f };
+                f32 defaultTargetSizes[ARR_COUNT(appState.targetSizes)] = { 5.0f, 10.0f, 25.0, 50.0,
+                                                                            100.0f };
                 CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
                 appState.defaultTargetSize = defaultTargetSizes[1];
             }

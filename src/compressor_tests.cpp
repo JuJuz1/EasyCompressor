@@ -112,16 +112,19 @@ TEST_CASE_FIXTURE(AddJobAppStateFixture, "IsPathFromOutputFolder works correctly
 
     char inputUtf8[MAX_PATH_COUNT];
     UTF16To8(tc.input, inputUtf8);
-    INFO("input:    ", inputUtf8);
-    INFO("expected: ", tc.exp);
+    INFO("input:           ", inputUtf8);
+    INFO("appstate output: ", appState.outputFolder);
+    INFO("expected:        ", tc.exp);
     CHECK_EQ(IsPathFromOutputFolder(&appState, tc.input), tc.exp);
 }
 
-// Temp file for AddJob
+// Temp files for AddJob
 struct TempFileFixture {
     // TODO: test paths greater than MAX_PATH: 260 and current MAX_PATH_COUNT
     wchar dir[MAX_PATH_COUNT];
     wchar path[MAX_PATH_COUNT];
+    wchar path2[MAX_PATH_COUNT];
+    wchar path3[MAX_PATH_COUNT];
 
     TempFileFixture() {
         i32 val = GetTempPathW(ARR_COUNT(dir), dir);
@@ -129,34 +132,45 @@ struct TempFileFixture {
         dir[val - 1] = '\0'; // Remove trailing slash...
         //CreateDirectoryW(dir, nullptr);
 
-        swprintf(path, ARR_COUNT(path), L"%ls\\test_file.mp4", dir);
-        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+        swprintf(path, ARR_COUNT(path), L"%ls\\test_fff.mp4", dir);
+        swprintf(path2, ARR_COUNT(path2), L"%ls\\tb.mp4", dir);
+        swprintf(path3, ARR_COUNT(path3), L"%ls\\ывьн.avi", dir);
+
+        CreateTestFile(path);
+        CreateTestFile(path2);
+        CreateTestFile(path3);
+    }
+
+    void
+    CreateTestFile(const wchar* pathW) {
+        HANDLE file = CreateFileW(pathW, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
         REQUIRE(file != INVALID_HANDLE_VALUE);
 
-        char data[4096] = {};
+        char data[4096] = "Test data\n :D";
         DWORD written = 0;
-
         BOOL ok = WriteFile(file, data, sizeof(data), &written, nullptr);
         REQUIRE(ok);
         REQUIRE(written == ARR_COUNT(data));
+
         CloseHandle(file);
     }
 
     ~TempFileFixture() {
         DeleteFileW(path);
-        //RemoveDirectoryW(dir);
+        DeleteFileW(path2);
+        DeleteFileW(path3);
     }
 };
 
 struct AddJobFixture : AddJobAppStateFixture, TempFileFixture {};
 
-TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size") {
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size correctly") {
     CAPTURE(appState);
     bool32 ok = AddJob(&appState, path);
     CHECK(ok);
     CHECK(appState.jobCount == 1);
-    CHECK(appState.jobs[0].inputFileSize > 0.0f);
+    CHECK(appState.jobs[0].inputFileSize == doctest::Approx(4096 / (1024.0f * 1024.0f)));
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob fails at MAX_JOBS") {
@@ -174,15 +188,13 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
-    // TODO: this fails if we start to reject duplicate input
-    i32 count = 3;
-    REQUIRE(count < MAX_JOBS);
-    for (i32 i = 0; i < count; ++i) {
-        CHECK(AddJob(&appState, path));
-    }
+    // TODO: test adding more than MAX_JOBS
+    CHECK(AddJob(&appState, path));
+    CHECK(AddJob(&appState, path2));
+    CHECK(AddJob(&appState, path3));
 
-    CHECK(appState.jobCount == count);
-    for (i32 i = 0; i < count; ++i) {
+    CHECK(appState.jobCount == 3);
+    for (i32 i = 0; i < 3; ++i) {
         CHECK(appState.jobs[i].status == JobStatus::QUEUED);
     }
 }
@@ -221,7 +233,7 @@ struct TempConfigFileFixture {
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
         REQUIRE(file != INVALID_HANDLE_VALUE);
 
-        char data[2048] = {};
+        char data[2048] = { "Another test data..." };
         DWORD written = 0;
 
         BOOL ok = WriteFile(file, data, sizeof(data), &written, nullptr);
