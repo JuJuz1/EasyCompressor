@@ -287,16 +287,10 @@ static AddJobResult
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
-        // TODO: there is no error message for this currently
-        // We essentially have 3 cases:
-        // - jobs full
-        // - duplicate input
-        // - input from output folder
         return AddJobResult::JOBS_FULL;
     }
 
-    // TODO: reject duplicate files?
-    for (i32 i = 0; i < MAX_JOBS; ++i) {
+    for (i32 i = 0; i < appState->jobCount; ++i) {
         UIJob* job = &appState->jobs[i];
         char buff[ARR_COUNT(job->input)];
         UTF16To8(path, buff);
@@ -351,9 +345,6 @@ RemoveJob(AppState* appState, i32 index) {
     for (i32 i = index; i < newJobCount; ++i) {
         appState->jobs[i] = appState->jobs[i + 1];
     }
-
-    // Have to clear the last as we reject duplicate input now
-    appState->jobs[newJobCount] = {};
 
     _InterlockedExchange(&appState->jobCount, newJobCount);
     return true;
@@ -1585,7 +1576,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
 static void
 ClearJobs(AppState* appState) {
     _InterlockedExchange(&appState->jobCount, 0);
-    ZeroMemory(appState->jobs, sizeof(appState->jobs));
+    // Actually don't have to since when adding a job we always clear to zero
+    //ZeroMemory(appState->jobs, sizeof(appState->jobs));
 }
 
 // Tests don't need this stuff
