@@ -167,36 +167,56 @@ struct AddJobFixture : AddJobAppStateFixture, TempFileFixture {};
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size correctly") {
     CAPTURE(appState);
-    bool32 ok = AddJob(&appState, path);
-    CHECK(ok);
+    auto result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::SUCCESS);
     CHECK(appState.jobCount == 1);
     CHECK(appState.jobs[0].inputFileSize == doctest::Approx(4096 / (1024.0f * 1024.0f)));
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob fails at MAX_JOBS") {
     appState.jobCount = MAX_JOBS;
-    bool32 ok = AddJob(&appState, path);
-    CHECK(!ok);
+    auto result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::JOBS_FULL);
     CHECK(appState.jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
     appState.jobCount = MAX_JOBS - 1;
-    bool32 ok = AddJob(&appState, path);
-    CHECK(ok);
+    auto result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::SUCCESS);
     CHECK(appState.jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
     // TODO: test adding more than MAX_JOBS
-    CHECK(AddJob(&appState, path));
-    CHECK(AddJob(&appState, path2));
-    CHECK(AddJob(&appState, path3));
+    auto result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::SUCCESS);
+    result = AddJob(&appState, path2);
+    CHECK(result == AddJobResult::SUCCESS);
+    result = AddJob(&appState, path3);
+    CHECK(result == AddJobResult::SUCCESS);
 
     CHECK(appState.jobCount == 3);
     for (i32 i = 0; i < 3; ++i) {
         CHECK(appState.jobs[i].status == JobStatus::QUEUED);
     }
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects duplicate input") {
+    auto result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::SUCCESS);
+
+    result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::DUPLICATE_JOB);
+    result = AddJob(&appState, path);
+    CHECK(result == AddJobResult::DUPLICATE_JOB);
+    CHECK(appState.jobCount == 1);
+
+    result = AddJob(&appState, path2);
+    CHECK(result == AddJobResult::SUCCESS);
+    result = AddJob(&appState, path2);
+    CHECK(result == AddJobResult::DUPLICATE_JOB);
+    CHECK(appState.jobCount == 2);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
@@ -209,8 +229,9 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
     snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "%s", dirUtf8);
     INFO(appState.outputFolder);
 
-    bool32 ok = AddJob(&appState, path);
-    CHECK(!ok);
+    auto result = AddJob(&appState, path);
+
+    CHECK(result == AddJobResult::JOB_FROM_OUTPUT);
     CHECK(appState.jobCount == 0);
 }
 

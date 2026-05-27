@@ -7,15 +7,14 @@
 #define MAX_PATH_COUNT 512
 
 enum JobStatus : u8 {
-    QUEUED = 0,
+    ERROR = 0,
 
+    QUEUED,
     RUNNING_PROBE,
     DONE_PROBE,
     RUNNING_COMPRESS,
     DONE_COMPRESS,
-    CANCELLED,
-
-    ERROR,
+    CANCELLED
 };
 
 enum class Codec : u8 {

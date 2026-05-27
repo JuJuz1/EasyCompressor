@@ -275,7 +275,15 @@ IsPathFromOutputFolder(AppState* appState, const wchar* path) {
     return StrEqual(copy, appState->outputFolder);
 }
 
-static bool32
+enum class AddJobResult : u8 {
+    JOBS_FULL = 0,
+    DUPLICATE_JOB,
+    JOB_FROM_OUTPUT,
+
+    SUCCESS
+};
+
+static AddJobResult
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
         DEBUG_PRINT("Jobs full!\n");
@@ -284,7 +292,7 @@ AddJob(AppState* appState, const wchar* path) {
         // - jobs full
         // - duplicate input
         // - input from output folder
-        return false;
+        return AddJobResult::JOBS_FULL;
     }
 
     // TODO: reject duplicate files?
@@ -293,7 +301,7 @@ AddJob(AppState* appState, const wchar* path) {
         char buff[ARR_COUNT(job->input)];
         UTF16To8(path, buff);
         if (StrEqual(job->input, buff)) {
-            return false;
+            return AddJobResult::DUPLICATE_JOB;
         }
     }
 
@@ -302,9 +310,7 @@ AddJob(AppState* appState, const wchar* path) {
 
     if (IsPathFromOutputFolder(appState, path)) {
         DEBUG_PRINTF("Tried to input from default output folder\n");
-        //SetPopupError(appState, "Don't input files from the output folder!\n"
-        //                        "This is to avoid name conflicts");
-        return false;
+        return AddJobResult::JOB_FROM_OUTPUT;
     }
 
     UIJob* j = &appState->jobs[appState->jobCount];
@@ -328,7 +334,7 @@ AddJob(AppState* appState, const wchar* path) {
     _InterlockedIncrement(&appState->jobCount);
     DEBUG_PRINTF("Added job: index = %d, input = %s,\ntarget size = %.2f MB, output = %s\n",
                  appState->jobCount - 1, j->input, j->targetSizeMb, j->output);
-    return true;
+    return AddJobResult::SUCCESS;
 }
 
 static void
@@ -920,6 +926,36 @@ StartBatch(AppState* appState) {
     DEBUG_PRINT("Start clicked\n");
 }
 
+// TODO: we currently don't handle the case where MAX_JOBS is hit but also some files are rejected
+// for other reasons. We only show an error based on the last error
+static void
+HandleAddJobError(i32 rejected, AddJobResult lastErrorResult) {
+    if (rejected > 0 && lastErrorResult != AddJobResult::SUCCESS) {
+        switch (lastErrorResult) {
+        case AddJobResult::JOBS_FULL: {
+            SetPopupError(gAppState,
+                          "Rejected %d file(s)\n"
+                          "Max job limit of %d was reached",
+                          rejected, MAX_JOBS);
+        } break;
+        case AddJobResult::DUPLICATE_JOB: {
+            SetPopupError(gAppState, "Rejected %d duplicate file(s)", rejected);
+        } break;
+        case AddJobResult::JOB_FROM_OUTPUT: {
+            SetPopupError(gAppState,
+                          "Rejected %d file(s)\n"
+                          "Files from the output folder can not be used!\n"
+                          "This is to avoid name conflicts",
+                          rejected);
+        } break;
+        default: {
+            SetPopupError(gAppState, "Rejected %d files", rejected);
+            INVALID_CODE_PATH;
+        }
+        }
+    }
+}
+
 //// -----------------------------------------------------------------------------
 /// Path stuff
 //// -----------------------------------------------------------------------------
@@ -1130,10 +1166,13 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     const wchar* file = buffer + ofn.nFileOffset; // Get the first file
 
     i32 rejected = 0;
+    AddJobResult lastErrorResult = AddJobResult::SUCCESS;
 
     // Single file
     if (*(file - 1) != L'\0') {
-        if (!AddJob(appState, buffer)) {
+        auto result = AddJob(appState, buffer);
+        if (result != AddJobResult::SUCCESS) {
+            lastErrorResult = result;
             ++rejected;
         }
     } else {
@@ -1141,7 +1180,9 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         while (*file) {
             wchar fullW[MAX_PATH_COUNT];
             swprintf(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
-            if (!AddJob(appState, fullW)) {
+            auto result = AddJob(appState, fullW);
+            if (result != AddJobResult::SUCCESS) {
+                lastErrorResult = result;
                 ++rejected;
             }
 
@@ -1149,9 +1190,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         }
     }
 
-    if (rejected > 0) {
-        SetPopupError(appState, "Rejected %d duplicate files", rejected);
-    }
+    HandleAddJobError(rejected, lastErrorResult);
 }
 
 static const char*
@@ -2257,6 +2296,8 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // TODO: validate by most common video file extensions?
         // We do allow files with no extension so probably not...
         i32 rejected = 0;
+        AddJobResult lastErrorResult = AddJobResult::SUCCESS;
+
         for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
             wchar path[MAX_PATH_COUNT];
             // Query the required character amount first, not including null terminator
@@ -2280,13 +2321,13 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
 
             ASSERT(gAppState);
-            if (!AddJob(gAppState, path)) {
+            auto result = AddJob(gAppState, path);
+            if (result != AddJobResult::SUCCESS) {
+                lastErrorResult = result;
                 ++rejected;
             }
 
-            if (rejected > 0) {
-                SetPopupError(gAppState, "Rejected %d duplicate files", rejected);
-            }
+            HandleAddJobError(rejected, lastErrorResult);
         }
 
         DragFinish(drop);
