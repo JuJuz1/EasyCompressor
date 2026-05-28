@@ -112,6 +112,7 @@ if !modeApp! == 1 (
     ) else (
         echo [32m[1mBuild succeeded[0m[1m !DATE! !NOW!
     )
+    echo.
 )
 
 if !modeTest! == 1 (
@@ -147,9 +148,9 @@ popd
 
 echo.
 if !buildFailed! NEQ 0 (
-    echo BUILD FAILED
+    echo [31m[1mBUILD FAILED[0m[1m
     exit /b 1
-) else (
-    echo BUILD SUCCESS
-    exit /b 0
 )
+
+echo [32m[1mBUILD SUCCESS[0m[1m
+exit /b 0

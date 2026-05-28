@@ -95,7 +95,7 @@ DEBUG_PRINTF(const char* fmt, ...) {
     char buf[512];
     va_list args;
     va_start(args, fmt);
-    vsnprintf(buf, ARR_COUNT(buf), fmt, args);
+    vsnprintf_s(buf, ARR_COUNT(buf), fmt, args);
     va_end(args);
 
     OutputDebugStringA(buf);
@@ -114,7 +114,7 @@ PRINTF(const char* fmt, ...) {
     char buf[512];
     va_list args;
     va_start(args, fmt);
-    vsnprintf(buf, ARR_COUNT(buf), fmt, args);
+    vsnprintf_s(buf, ARR_COUNT(buf), fmt, args);
     va_end(args);
 
     OutputDebugStringA(buf);
@@ -225,7 +225,7 @@ CodecText_(Codec s) {
 static void
 ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     UTF16To8(path, j->input);
-    //snprintf(j->input, sizeof(j->input), "%s", s.c_str());
+    //_snprintf_s(j->input, sizeof(j->input), "%s", s.c_str());
 
     // TODO: should probably use the Windows API for path processing as we don't handle UNC paths or
     // device paths at all here!
@@ -243,7 +243,7 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // TODO: this probably suffices as we don't have to do any string processing really
     // Just always use the output folder specified and remove the checkbox
     if (lastSlash) {
-        snprintf(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
+        _snprintf_s(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
     } else {
         INVALID_CODE_PATH;
     }
@@ -450,10 +450,10 @@ RunProbe(AppState* appState, UIJob* job) {
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
     char cmd[(MAX_PATH_COUNT * 2) + 128];
-    snprintf(cmd, ARR_COUNT(cmd),
-             "\"%sffprobe.exe\" -v error -show_entries format=duration "
-             "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
-             appState->ffmpegPath, job->input);
+    _snprintf_s(cmd, ARR_COUNT(cmd),
+                "\"%sffprobe.exe\" -v error -show_entries format=duration "
+                "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
+                appState->ffmpegPath, job->input);
     DEBUG_PRINTF("Running: %s\n", cmd);
 
     wchar cmdW[ARR_COUNT(cmd)];
@@ -651,14 +651,15 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        snprintf(cmd, ARR_COUNT(cmd),
-                 "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // -f mp4, this throws error...
-                                                                // But it works fine without file
-                                                                // extension also
-                 // "-pass 1 -an -f null %s",
-                 "-pass 1 -passlogfile \"%s\\easycompressor_ffmpeg\" -an -f null %s",
-                 appState->ffmpegPath, job->input, codec, videoKbps, appState->tempDir, NULL_DEV);
+        _snprintf_s(cmd, ARR_COUNT(cmd),
+                    "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                    "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // -f mp4, this throws error...
+                                                                   // But it works fine without file
+                                                                   // extension also
+                    // "-pass 1 -an -f null %s",
+                    "-pass 1 -passlogfile \"%s\\easycompressor_ffmpeg\" -an -f null %s",
+                    appState->ffmpegPath, job->input, codec, videoKbps, appState->tempDir,
+                    NULL_DEV);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         // Probably easier this way as we would have to do 3 conversions otherwise
@@ -766,15 +767,15 @@ RunCompress(AppState* appState, UIJob* job) {
 
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
-        snprintf(cmd, ARR_COUNT(cmd),
-                 "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
-                 "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
-                 // "-pass 2 "
-                 "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
-                 "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
-                 appState->ffmpegPath, job->input, codec,
-                 videoKbps, //, passLog,
-                 appState->tempDir, audioKbps, job->output);
+        _snprintf_s(cmd, ARR_COUNT(cmd),
+                    "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                    "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
+                    // "-pass 2 "
+                    "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
+                    "-c:a aac -b:a %.0fk -movflags +faststart \"%s\"",
+                    appState->ffmpegPath, job->input, codec,
+                    videoKbps, //, passLog,
+                    appState->tempDir, audioKbps, job->output);
         DEBUG_PRINTF("Running: %s\n", cmd);
 
         wchar cmdW[ARR_COUNT(cmd)];
@@ -1498,8 +1499,8 @@ ParseConfigBuffer(AppState* appState, const char* buff) {
 
                     if (valid) {
                         DEBUG_PRINTF("Using output path: %s\n", outputPath);
-                        snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder),
-                                 outputPath);
+                        _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder),
+                                    outputPath);
                     } else {
                         DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
                     }
@@ -1532,8 +1533,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
         if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
             DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
             // Use exe dir as working dir...
-            snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
-                     appState->exeDir);
+            _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                        appState->exeDir);
         } else {
             DEBUG_PRINTF("Found documents %ls\n", outputFolder);
             swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
@@ -1547,8 +1548,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
                     INVALID_CODE_PATH;
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
-                    snprintf(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
-                             appState->exeDir);
+                    _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                                appState->exeDir);
                 }
             }
         }
@@ -1780,7 +1781,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         }
 
         char label[32];
-        snprintf(label, ARR_COUNT(label), "%.1f MB##default_%d", size, i);
+        _snprintf_s(label, ARR_COUNT(label), "%.1f MB##default_%d", size, i);
         if (ImGui::Button(label, ImVec2(80 * scale, 0))) {
             *defaultTargetSize = size;
         }
@@ -1884,7 +1885,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             ImGui::BeginDisabled(jobRunning || i < highestRunningIndex);
             {
                 char label[4];
-                snprintf(label, ARR_COUNT(label), "%d", i + 1);
+                _snprintf_s(label, ARR_COUNT(label), "%d", i + 1);
                 // Full cell width and height
                 ImGui::Selectable(
                     label, false, 0,
@@ -2203,6 +2204,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             ImGui::CloseCurrentPopup();
         }
 
+        // TODO: give a button to just delete the config file?
         ImGui::SameLine();
         const char* text = "Open config folder...";
         // Align right
@@ -2356,8 +2358,7 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 DEBUG_PRINTF("Path was truncated, didn't add job! Max length: %d\nPath would have "
                              "been %s\n",
                              MAX_PATH_COUNT, path);
-                // TODO: show error for user for discarded files, or no? It's quite self-evident
-                // what is happening
+                // TODO: doesn't show error yet
                 continue;
             }
 
@@ -2405,13 +2406,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     // | DEV | DEBUG
     char windowName[ARR_COUNT(COMPRESSOR_NAME) + 6 + 8];
-    snprintf(windowName, ARR_COUNT(windowName), COMPRESSOR_NAME);
+    _snprintf_s(windowName, ARR_COUNT(windowName), COMPRESSOR_NAME);
 #    if COMPRESSOR_DEV
-    snprintf(windowName, ARR_COUNT(windowName), "%s | DEV", windowName);
+    _snprintf_s(windowName, ARR_COUNT(windowName), "%s | DEV", windowName);
 //windowName += L" | DEV";
 #    endif
 #    if COMPRESSOR_DEBUG
-    snprintf(windowName, ARR_COUNT(windowName), "%s | DEBUG", windowName);
+    _snprintf_s(windowName, ARR_COUNT(windowName), "%s | DEBUG", windowName);
 //windowName += L" | DEBUG";
 #    endif
 
@@ -2491,7 +2492,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 #    if 1
         char buff[MAX_PATH_COUNT + 64];
         // This should show basically all Unicode characters
-        snprintf(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
+        _snprintf_s(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
         io.Fonts->AddFontFromFileTTF(buff, 18.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
 #    else
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f, nullptr,
@@ -2512,12 +2513,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     if (!result) {
         DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
         // Use exe dir as working dir...
-        snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+        _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
     }
     // No space!
     else if (result >= ARR_COUNT(appState.tempDir)) {
         DEBUG_PRINT("No space for temp dir, using exe dir...\n");
-        snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+        _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
     } else {
         // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
         ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
@@ -2525,7 +2526,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             //appState.tempDir[result - 1] = '\0';
             UTF16To8(tempDir, appState.tempDir);
         } else {
-            snprintf(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+            _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
         }
     }
 
@@ -2535,7 +2536,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     wchar appData[MAX_PATH_COUNT];
     if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
         DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
-        snprintf(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
+        _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
     } else {
         // Also very cumbersome to print wide strings, have to use %ls
         // probably doesn't even work correctly for special characters...
@@ -2549,14 +2550,14 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             if (err != ERROR_ALREADY_EXISTS) {
                 DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                              "there. Using exe dir...\n");
-                snprintf(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
+                _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
                 INVALID_CODE_PATH;
             }
         }
     }
 
     char configPath[MAX_PATH_COUNT];
-    snprintf(configPath, ARR_COUNT(configPath), "%s\\easycompressor.cfg", appState.appData);
+    _snprintf_s(configPath, ARR_COUNT(configPath), "%s\\easycompressor.cfg", appState.appData);
 
     wchar configPathW[MAX_PATH_COUNT];
     UTF8To16(configPath, configPathW);
@@ -2567,7 +2568,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             SetPopupErrorMsg(&appState,
                              "Config is malformed, consider fixing or deleting it\n"
                              "The app will generate a new one upon startup after deletion");
-            // TODO: show error (and prompt to delete?)
         } else {
             bool32 created = CreateDefaultConfigFile(configPathW);
             if (created) {
@@ -2584,11 +2584,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     }
 
     // imgui.ini also to same path
-    snprintf(configPath, ARR_COUNT(configPath), "%s\\imgui.ini", appState.appData);
+    _snprintf_s(configPath, ARR_COUNT(configPath), "%s\\imgui.ini", appState.appData);
     io.IniFilename = configPath;
 
     // TODO: support package managers so read from PATH
-    snprintf(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "vendor\\ffmpeg\\");
+    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "vendor\\ffmpeg\\");
 
     // Start worker thread
     HANDLE workerThread = CreateThread(nullptr, 0, WorkerThread, &appState, 0, nullptr);
