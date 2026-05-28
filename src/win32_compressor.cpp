@@ -1686,7 +1686,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     bool32 noJobs = appState->jobCount == 0;
 
 #    if COMPRESSOR_DEV
-    ImGui::TextDisabled("Compressing: %d, cancelled: %d", compressing, cancelled);
+    ImGui::TextDisabled("DEV: compressing: %d, cancelled: %d", compressing, cancelled);
 #    endif
 
     const f32 sliderWidth = 190 * scale;
@@ -2228,7 +2228,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
         ImGui::TextUnformatted(uiState->errorMsgPopup);
 
         const char* btn1 = "OK";
-        const char* btn2 = "Create new config";
+        const char* btn2 = "Reset config";
         const char* btn3 = "Open config folder...";
 
         f32 framePad = ImGui::GetStyle().FramePadding.x * 2;

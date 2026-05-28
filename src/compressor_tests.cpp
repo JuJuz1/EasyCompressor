@@ -462,7 +462,7 @@ TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips comments") {
                            "#ASDasd"
                            "test characters### dфывьн - --" });
     ParseConfigBuffer(&appState, tc.content);
-    CHECK(IsZeroed());
+    CHECK(this->IsZeroed());
 }
 
 TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips garbage input") {
@@ -480,7 +480,7 @@ TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips garbage input") {
                            "#comment\n     !!!! #### ????"
                            "" });
     ParseConfigBuffer(&appState, tc.content);
-    CHECK(IsZeroed());
+    CHECK(this->IsZeroed());
 }
 
 struct ParseConfigAppStateFixture {
@@ -547,14 +547,14 @@ TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly
                            Codec::NONE,
                            "" });
 
-    // TODO: this creates the folder
+    // TODO: this creates the folder for output path
     ParseConfigBuffer(&appState, tc.content);
     INFO(tc.content);
     for (i32 i = 0; i < ARR_COUNT(appState.targetSizes); ++i) {
-        CHECK_EQ(appState.targetSizes[i], tc.expSizes[i]);
+        CHECK(appState.targetSizes[i] == doctest::Approx(tc.expSizes[i]));
     }
 
-    CHECK_EQ(appState.defaultTargetSize, tc.expDefaultSize);
+    CHECK(appState.defaultTargetSize == doctest::Approx(tc.expDefaultSize));
     CHECK_EQ(appState.defaultCodec, tc.expCodec);
 
     INFO(appState.outputFolder);
@@ -567,4 +567,93 @@ TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly
     if (PathFileExistsW(outputW)) {
         RemoveDirectoryW(outputW);
     }
+}
+
+/// LoadConfigFile
+
+struct LoadConfigFileFixture {
+    AppState appState = {};
+    wchar dir[MAX_PATH_COUNT];
+    wchar path[MAX_PATH_COUNT];
+
+    LoadConfigFileFixture() {
+        i32 val = GetTempPathW(ARR_COUNT(dir), dir);
+        REQUIRE(val != 0);
+        dir[val - 1] = '\0';
+        swprintf(path, ARR_COUNT(path), L"%ls\\easycompressor_test.cfg", dir);
+    }
+
+    ~LoadConfigFileFixture() { DeleteFileW(path); }
+
+    void
+    WriteConfig(const char* content) {
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        REQUIRE(file != INVALID_HANDLE_VALUE);
+        DWORD written = 0;
+        BOOL ok = WriteFile(file, content, StrLength(content), &written, nullptr);
+        REQUIRE(ok);
+        REQUIRE(written == StrLength(content));
+        CloseHandle(file);
+    }
+
+    void
+    CleanupCreatedOutputFolder() {
+        wchar outputW[MAX_PATH_COUNT];
+        UTF8To16(appState.outputFolder, outputW);
+        if (PathFileExistsW(outputW)) {
+            RemoveDirectoryW(outputW);
+        }
+    }
+};
+
+// These just test that the fallbacks work correctly
+// ParseConfigBuffer does the heavy lifting
+TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile fails correctly") {
+    CHECK(!LoadConfigFile(nullptr, &appState, L"invalid/path/file.cfg"));
+
+    // No sizes is the only content failure
+    this->WriteConfig("[Codecs]\nh264\n");
+    CHECK(!LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultCodec == Codec::H264);
+    INFO(appState.outputFolder);
+    // TODO: we assign to User/Documents/EasyCompressor
+    // hard to test so we just check this
+    CHECK(appState.outputFolder[0] != '\0');
+}
+
+TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks correctly") {
+    this->WriteConfig("[Sizes]\n2.0\n5.0\n");
+    REQUIRE(LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultCodec == Codec::H264);
+    CHECK(appState.defaultTargetSize == doctest::Approx(2.0f));
+    CHECK(appState.outputFolder[0] != '\0');
+    this->CleanupCreatedOutputFolder();
+
+    appState = {};
+    this->WriteConfig("[Sizes]\n2.0\n5.0 !\n[Codecs]\nh265 !\n[OutputPath]\nC:\\EasyCompTemp");
+    REQUIRE(LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
+    CHECK(appState.defaultCodec == Codec::H265);
+    CHECK(StrEqual(appState.outputFolder, "C:\\EasyCompTemp"));
+    this->CleanupCreatedOutputFolder();
+
+    appState = {};
+    this->WriteConfig("[Sizes]\n7.5\n    6.42\n");
+    REQUIRE(LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultTargetSize == doctest::Approx(7.5f));
+    this->CleanupCreatedOutputFolder();
+
+    appState = {};
+    this->WriteConfig("[Sizes]\n2.0\n5.0 !\n4.0\n");
+    REQUIRE(LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
+    this->CleanupCreatedOutputFolder();
+
+    appState = {};
+    this->WriteConfig("[Sizes]\n2.\n[Codecs]");
+    REQUIRE(LoadConfigFile(nullptr, &appState, path));
+    CHECK(appState.defaultTargetSize == doctest::Approx(2.0f));
+    CHECK(appState.defaultCodec == Codec::H264);
+    this->CleanupCreatedOutputFolder();
 }
