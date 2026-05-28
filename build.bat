@@ -112,10 +112,10 @@ if !modeApp! == 1 (
     ) else (
         echo [32m[1mBuild succeeded[0m[1m !DATE! !NOW!
     )
-    echo.
 )
 
 if !modeTest! == 1 (
+    echo.
     echo Building tests...
     set defines=!defines! -DCOMPRESSOR_TESTS=1
     echo !defines!

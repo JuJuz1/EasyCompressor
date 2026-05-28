@@ -148,9 +148,9 @@ ShowNotification(const wchar* msg, const wchar* title, DWORD flags) {
     data.uFlags = NIF_INFO | NIF_TIP;
     data.dwInfoFlags = flags; // NIIF_INFO, NIIF_WARNING, NIIF_ERROR
 
-    swprintf(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
-    swprintf(data.szInfo, ARR_COUNT(data.szInfo), L"%ls", msg);
-    swprintf(data.szInfoTitle, ARR_COUNT(data.szInfoTitle), L"%ls", title);
+    _snwprintf_s(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
+    _snwprintf_s(data.szInfo, ARR_COUNT(data.szInfo), L"%ls", msg);
+    _snwprintf_s(data.szInfoTitle, ARR_COUNT(data.szInfoTitle), L"%ls", title);
     Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
@@ -167,7 +167,7 @@ AddTrayIcon(HWND hWnd, HICON hIcon) {
     //data.uCallbackMessage = ?; Can be used inside WndProc
     data.hIcon = hIcon;
 
-    swprintf(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
+    _snwprintf_s(data.szTip, ARR_COUNT(data.szTip), COMPRESSOR_NAMEW);
     Shell_NotifyIconW(NIM_ADD, &data);
 }
 
@@ -921,7 +921,7 @@ WorkerThread(void* param) {
             _InterlockedExchange(&appState->compressing, 0);
             if (!cancelled) {
                 wchar buff[32];
-                swprintf(buff, ARR_COUNT(buff), L"%d video(s)", jobCount);
+                _snwprintf_s(buff, ARR_COUNT(buff), L"%d video(s)", jobCount);
                 ShowNotification(buff, L"Compression finished", NIIF_INFO);
             }
         }
@@ -1000,7 +1000,7 @@ SelectInExplorer(HWND hWnd, const char* path) {
     wchar pathW[MAX_PATH_COUNT];
     UTF8To16(path, pathW);
     wchar cmd[MAX_PATH_COUNT];
-    swprintf(cmd, ARR_COUNT(cmd), L"/select,\"%ls\"", pathW);
+    _snwprintf_s(cmd, ARR_COUNT(cmd), L"/select,\"%ls\"", pathW);
     ShellExecuteW(hWnd, L"open", L"explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
 }
 
@@ -1067,7 +1067,8 @@ static void
 SaveOutputPathToConfig(AppState* appState, const char* path) {
     wchar configFilePath[ARR_COUNT(appState->appData) + 32];
     UTF8To16(appState->appData, configFilePath);
-    swprintf(configFilePath, ARR_COUNT(configFilePath), L"%ls\\easycompressor.cfg", configFilePath);
+    _snwprintf_s(configFilePath, ARR_COUNT(configFilePath), L"%ls\\easycompressor.cfg",
+                 configFilePath);
     HANDLE file = CreateFileW(configFilePath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
@@ -1193,7 +1194,7 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         // Multiple files
         while (*file) {
             wchar fullW[MAX_PATH_COUNT];
-            swprintf(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
+            _snwprintf_s(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
             auto result = AddJob(appState, fullW);
             if (result != AddJobResult::SUCCESS) {
                 lastErrorResult = result;
@@ -1537,7 +1538,8 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
                         appState->exeDir);
         } else {
             DEBUG_PRINTF("Found documents %ls\n", outputFolder);
-            swprintf(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor", outputFolder);
+            _snwprintf_s(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor",
+                         outputFolder);
             // It's okay to fail silently
             BOOL created = CreateDirectoryW(outputFolder, nullptr);
             UTF16To8(outputFolder, appState->outputFolder);
@@ -1603,6 +1605,26 @@ ClearJobs(AppState* appState) {
     SetErrorMsg(appState, nullptr);
 }
 
+static void
+OverwriteAndLoadNewConfig(HWND hWnd, AppState* appState) {
+    wchar configFilePathW[MAX_PATH_COUNT];
+    UTF8To16(appState->configFilePath, configFilePathW);
+    if (DeleteFileW(configFilePathW)) {
+        if (CreateDefaultConfigFile(configFilePathW)) {
+            if (LoadConfigFile(hWnd, appState, configFilePathW)) {
+                DEBUG_PRINT("Loaded config file after recreation!");
+            } else {
+                SetErrorMsg(appState, "Couldn't load newly created config");
+                DEBUG_PRINT("Couldn't load config file after recreation!");
+            }
+        } else {
+            SetErrorMsg(appState, "Couldn't create new config");
+        }
+    } else {
+        SetErrorMsg(appState, "Couldn't delete old config");
+    }
+}
+
 // Tests don't need this stuff
 #if !COMPRESSOR_TESTS
 
@@ -1638,6 +1660,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             if (ImGui::MenuItem("About")) {
                 uiState->helpAboutClicked = true;
                 DEBUG_PRINT("About clicked\n");
+            }
+
+            if (ImGui::MenuItem("Reset config")) {
+                OverwriteAndLoadNewConfig(hWnd, appState);
             }
 
             if (ImGui::MenuItem("Open config folder...")) {
@@ -1733,7 +1759,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.7f, 1.0f));
 
-        // TODO: easily configurable if needed
+        // Easily configurable if needed
         const f32 maxWidth = 550.0f;
         f32 requiredWidth = ImGui::CalcTextSize(appState->outputFolder).x;
         requiredWidth = ClampF32(requiredWidth, 0.0f, maxWidth);
@@ -2200,20 +2226,30 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                                    ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted(uiState->errorMsgPopup);
-        if (ImGui::Button("OK") || uiState->escJustPressed) {
+
+        const char* btn1 = "OK";
+        const char* btn2 = "Create new config";
+        const char* btn3 = "Open config folder...";
+
+        f32 framePad = ImGui::GetStyle().FramePadding.x * 2;
+        f32 w1 = ImGui::CalcTextSize(btn1).x + framePad;
+        f32 w2 = ImGui::CalcTextSize(btn2).x + framePad;
+        f32 w3 = ImGui::CalcTextSize(btn3).x + framePad;
+        f32 gap = (ImGui::GetContentRegionAvail().x - w1 - w2 - w3) / 2.0f;
+
+        if (ImGui::Button(btn1) || uiState->escJustPressed) {
             ImGui::CloseCurrentPopup();
         }
 
-        // TODO: give a button to just delete the config file?
-        ImGui::SameLine();
-        const char* text = "Open config folder...";
-        // Align right
-        f32 width = ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2;
-        f32 avail = ImGui::GetContentRegionAvail().x;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width);
-        if (ImGui::Button(text)) {
-            OpenInExplorer(hWnd, appState->appData);
+        ImGui::SameLine(0, gap);
+        if (ImGui::Button(btn2)) {
+            OverwriteAndLoadNewConfig(hWnd, appState);
             ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::SameLine(0, gap);
+        if (ImGui::Button(btn3)) {
+            OpenInExplorer(hWnd, appState->appData);
         }
 
         ImGui::EndPopup();
@@ -2523,8 +2559,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
         ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
         if (result > 0 && result < ARR_COUNT(appState.tempDir)) {
-            //appState.tempDir[result - 1] = '\0';
             UTF16To8(tempDir, appState.tempDir);
+            appState.tempDir[result - 1] = '\0';
         } else {
             _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
         }
@@ -2541,7 +2577,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         // Also very cumbersome to print wide strings, have to use %ls
         // probably doesn't even work correctly for special characters...
         DEBUG_PRINTF("Found appdata %ls\n", appData);
-        swprintf(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
+        _snwprintf_s(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
         BOOL created = CreateDirectoryW(appData, nullptr);
         // This is extremely annoying to do having to convert all the time
         UTF16To8(appData, appState.appData);
@@ -2556,11 +2592,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         }
     }
 
-    char configPath[MAX_PATH_COUNT];
-    _snprintf_s(configPath, ARR_COUNT(configPath), "%s\\easycompressor.cfg", appState.appData);
+    _snprintf_s(appState.configFilePath, ARR_COUNT(appState.configFilePath),
+                "%s\\easycompressor.cfg", appState.appData);
 
     wchar configPathW[MAX_PATH_COUNT];
-    UTF8To16(configPath, configPathW);
+    UTF8To16(appState.configFilePath, configPathW);
     bool32 ok = LoadConfigFile(hWnd, &appState, configPathW);
     if (!ok) {
         bool32 configExists = PathFileExistsW(configPathW);
@@ -2584,11 +2620,13 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     }
 
     // imgui.ini also to same path
+    char configPath[MAX_PATH_COUNT];
     _snprintf_s(configPath, ARR_COUNT(configPath), "%s\\imgui.ini", appState.appData);
     io.IniFilename = configPath;
 
     // TODO: support package managers so read from PATH
-    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "vendor\\ffmpeg\\");
+    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "%s\\vendor\\ffmpeg\\",
+                appState.exeDir);
 
     // Start worker thread
     HANDLE workerThread = CreateThread(nullptr, 0, WorkerThread, &appState, 0, nullptr);
@@ -2610,9 +2648,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     wchar exeDir[ARR_COUNT(appState.exeDir)];
     UTF8To16(appState.exeDir, exeDir);
 
-    swprintf(testPath1, ARR_COUNT(testPath1), L"%ls\\..\\test_file1_large.mp4", exeDir);
-    swprintf(testPath2, ARR_COUNT(testPath2), L"%ls\\..\\test_file2.mp4", exeDir);
-    swprintf(testPath3, ARR_COUNT(testPath3), L"%ls\\..\\testi_file_small.mp4", exeDir);
+    _snwprintf_s(testPath1, ARR_COUNT(testPath1), L"%ls\\..\\test_file1_large.mp4", exeDir);
+    _snwprintf_s(testPath2, ARR_COUNT(testPath2), L"%ls\\..\\test_file2.mp4", exeDir);
+    _snwprintf_s(testPath3, ARR_COUNT(testPath3), L"%ls\\..\\testi_file_small.mp4", exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);

@@ -93,6 +93,8 @@ struct AppState {
     char exeDir[MAX_PATH_COUNT];  // Absolute path to the exe directory
     char tempDir[MAX_PATH_COUNT]; // Temp dir for ffmpeg logs
 
-    char appData[MAX_PATH_COUNT];    // AppData/Local, where the config and imgui.ini are stored
-    char ffmpegPath[MAX_PATH_COUNT]; // Relative to working directory OR TODO: path?
+    char appData[MAX_PATH_COUNT]; // AppData/Local/EasyCompressor, where the config and imgui.ini
+                                  // are stored
+    char configFilePath[MAX_PATH_COUNT]; // AppData/Local/EasyCompressor/easycompressor.cfg
+    char ffmpegPath[MAX_PATH_COUNT];     // Relative to working directory OR TODO: path?
 };
