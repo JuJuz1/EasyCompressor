@@ -1,11 +1,5 @@
 #pragma once
 
-// Has to be enough, including null terminator
-// MAX_PATH is 260 defined by Windows
-// TODO: if we want to support UNICODE wide paths (32 767 characters), would need to allocate memory
-// https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
-#define MAX_PATH_COUNT 512
-
 enum JobStatus : u8 {
     ERROR = 0,
 
@@ -23,6 +17,20 @@ enum class Codec : u8 {
     H264,
     H265
 };
+
+enum class AddJobResult : u8 {
+    JOBS_FULL = 0,
+    DUPLICATE_JOB,
+    JOB_FROM_OUTPUT,
+
+    SUCCESS
+};
+
+// Has to be enough, including null terminator
+// MAX_PATH is 260 defined by Windows
+// TODO: if we want to support UNICODE wide paths (32 767 characters), would need to allocate memory
+// https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
+#define MAX_PATH_COUNT 512
 
 struct UIJob {
     char input[MAX_PATH_COUNT];

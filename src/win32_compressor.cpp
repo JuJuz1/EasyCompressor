@@ -296,14 +296,6 @@ IsPathFromOutputFolder(AppState* appState, const wchar* path) {
     return StrEqual(copy, appState->outputFolder);
 }
 
-enum class AddJobResult : u8 {
-    JOBS_FULL = 0,
-    DUPLICATE_JOB,
-    JOB_FROM_OUTPUT,
-
-    SUCCESS
-};
-
 static AddJobResult
 AddJob(AppState* appState, const wchar* path) {
     if (appState->jobCount >= MAX_JOBS) {
@@ -451,7 +443,7 @@ RunProbe(AppState* appState, UIJob* job) {
 
     char cmd[(MAX_PATH_COUNT * 2) + 128];
     _snprintf_s(cmd, ARR_COUNT(cmd),
-                "\"%sffprobe.exe\" -v error -show_entries format=duration "
+                "\"%s\\ffprobe.exe\" -v error -show_entries format=duration "
                 "-of default=noprint_wrappers=1:nokey=1 \"%s\"",
                 appState->ffmpegPath, job->input);
     DEBUG_PRINTF("Running: %s\n", cmd);
@@ -652,7 +644,7 @@ RunCompress(AppState* appState, UIJob* job) {
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
         _snprintf_s(cmd, ARR_COUNT(cmd),
-                    "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                    "\"%s\\ffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                     "-i \"%s\" -c:v %s -preset medium -b:v %.0fk " // -f mp4, this throws error...
                                                                    // But it works fine without file
                                                                    // extension also
@@ -768,7 +760,7 @@ RunCompress(AppState* appState, UIJob* job) {
         SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
         _snprintf_s(cmd, ARR_COUNT(cmd),
-                    "\"%sffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
+                    "\"%s\\ffmpeg\" -y -hide_banner -loglevel error -progress pipe:1 "
                     "-i \"%s\" -c:v %s -preset medium -b:v %.0fk -f mp4 " // Default to mp4
                     // "-pass 2 "
                     "-pass 2 -passlogfile \"%s\\easycompressor_ffmpeg\" "
@@ -2529,7 +2521,17 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         char buff[MAX_PATH_COUNT + 64];
         // This should show basically all Unicode characters
         _snprintf_s(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
-        io.Fonts->AddFontFromFileTTF(buff, 18.0f, nullptr, io.Fonts->GetGlyphRangesDefault());
+        ImFontConfig fontConfig = {};
+        // TODO: Flags is not yet exposed to be externally modified as of v1.92.7
+        // See ImFontConfig declaration
+        // But we want to be able to skip the error if the font is not found and use the default
+        fontConfig.Flags |= ImFontFlags_NoLoadError;
+        // If this fails the default font is used
+        auto* font = io.Fonts->AddFontFromFileTTF(buff, 18.0f, &fontConfig,
+                                                  io.Fonts->GetGlyphRangesDefault());
+        if (!font) {
+            DEBUG_PRINTF("Couldn't load font file: %s\n", buff);
+        }
 #    else
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f, nullptr,
                                      io.Fonts->GetGlyphRangesDefault());
@@ -2544,50 +2546,55 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     /// Temp dir
 
-    wchar tempDir[MAX_PATH_COUNT];
-    DWORD result = GetTempPathW(MAX_PATH_COUNT, tempDir);
-    if (!result) {
-        DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
-        // Use exe dir as working dir...
-        _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
-    }
-    // No space!
-    else if (result >= ARR_COUNT(appState.tempDir)) {
-        DEBUG_PRINT("No space for temp dir, using exe dir...\n");
-        _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
-    } else {
-        // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
-        ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
-        if (result > 0 && result < ARR_COUNT(appState.tempDir)) {
-            UTF16To8(tempDir, appState.tempDir);
-            appState.tempDir[result - 1] = '\0';
-        } else {
+    {
+        wchar tempDir[MAX_PATH_COUNT];
+        DWORD result = GetTempPathW(MAX_PATH_COUNT, tempDir);
+        if (!result) {
+            DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
+            // Use exe dir as working dir...
             _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+        }
+        // No space!
+        else if (result >= ARR_COUNT(appState.tempDir)) {
+            DEBUG_PRINT("No space for temp dir, using exe dir...\n");
+            _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+        } else {
+            // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
+            ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
+            if (result > 0 && result < ARR_COUNT(appState.tempDir)) {
+                UTF16To8(tempDir, appState.tempDir);
+                appState.tempDir[result - 1] = '\0';
+            } else {
+                _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+            }
         }
     }
 
     /// Config file
     // TODO: exact same code as above
 
-    wchar appData[MAX_PATH_COUNT];
-    if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
-        DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
-        _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
-    } else {
-        // Also very cumbersome to print wide strings, have to use %ls
-        // probably doesn't even work correctly for special characters...
-        DEBUG_PRINTF("Found appdata %ls\n", appData);
-        _snwprintf_s(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
-        BOOL created = CreateDirectoryW(appData, nullptr);
-        // This is extremely annoying to do having to convert all the time
-        UTF16To8(appData, appState.appData);
-        if (!created) {
-            DWORD err = GetLastError();
-            if (err != ERROR_ALREADY_EXISTS) {
-                DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
-                             "there. Using exe dir...\n");
-                _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
-                INVALID_CODE_PATH;
+    {
+        wchar appData[MAX_PATH_COUNT];
+        if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
+            DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
+            _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
+        } else {
+            // Also very cumbersome to print wide strings, have to use %ls
+            // probably doesn't even work correctly for special characters...
+            DEBUG_PRINTF("Found appdata %ls\n", appData);
+            _snwprintf_s(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
+            BOOL created = CreateDirectoryW(appData, nullptr);
+            // This is extremely annoying to do having to convert all the time
+            UTF16To8(appData, appState.appData);
+            if (!created) {
+                DWORD err = GetLastError();
+                if (err != ERROR_ALREADY_EXISTS) {
+                    DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
+                                 "there. Using exe dir...\n");
+                    _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s",
+                                appState.exeDir);
+                    INVALID_CODE_PATH;
+                }
             }
         }
     }
@@ -2625,7 +2632,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     io.IniFilename = configPath;
 
     // TODO: support package managers so read from PATH
-    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "%s\\vendor\\ffmpeg\\",
+    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "%s\\vendor\\ffmpeg",
                 appState.exeDir);
 
     // Start worker thread
