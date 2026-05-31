@@ -2,6 +2,8 @@
 
 A native Windows C++ application that compresses any video to a target file size using FFmpeg
 
+![Demo video](misc/easycompressor.gif)
+
 The end goal for this project is to act as a native desktop application replacement for this
 compression website I have used https://www.freeconvert.com/video-compressor This way we can take
 advantage of the precious hardware each one of us has!
