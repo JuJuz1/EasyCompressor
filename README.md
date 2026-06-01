@@ -1,6 +1,6 @@
-# EasyCompress
+# EasyCompressor
 
-A native Windows C++ application that compresses any video to a target file size using FFmpeg
+A native Windows C++ desktop application that compresses any video to a target file size using FFmpeg
 
 ![Demo video](misc/easycompressor.gif)
 
