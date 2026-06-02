@@ -131,6 +131,7 @@ if !modeApp! == 1 (
     echo !defines!
     echo !flags!
 
+    rem TODO: seperate based on debug/release??
     if !modeUseCTime! == 1 (
         ctime.exe -begin timings.ctm
     )
@@ -182,7 +183,6 @@ if !buildFailed! == 0 if !modeApp! == 1 (
 )
 
 if !modeTest! == 1 if !buildFailed! == 0 (
-    echo.
     echo Building tests...
     set defines=!defines! -DCOMPRESSOR_TESTS=1
     echo !defines!

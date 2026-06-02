@@ -630,7 +630,31 @@ TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks corre
     CHECK(appState.outputFolder[0] != '\0');
     this->CleanupCreatedOutputFolder();
 
-    appState = {};
+    //appState = {};
+
+    /*
+    fatal error C1001: Internal compiler error.
+    (compiler file 'D:\a\_work\1\s\src\vctools\Compiler\Utc\src\p2\main.cpp', line 263)
+    To work around this problem, try simplifying or changing the program near the locations listed
+    above. If possible please provide a repro here: https://developercommunity.visualstudio.com
+    Please choose the Technical Support command on the Visual C++ Help menu, or open the Technical
+    Support help file for more information
+    cl!RaiseException()+0x8a
+    cl!RaiseException()+0x8a
+    cl!CloseTypeServerPDB()+0x1ec3c3
+    cl!CloseTypeServerPDB()+0x23c232
+    cl!DllGetObjHandler()+0xb3f8b
+    cl!DllGetObjHandler()+0x180fbf
+
+    Already had this happen before inside AddJob:
+    UIJob* j = &appState->jobs[appState->jobCount];
+    *j = {};
+
+    I guess the compiler tries to do some magic but crashes in that attempt. Using ZeroMemory
+    manually has fixed the issue every time
+    */
+
+    ZeroMemory(&appState, sizeof(appState));
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n[Codecs]\nh265 !\n[OutputPath]\nC:\\EasyCompTemp");
     REQUIRE(LoadConfigFile(nullptr, &appState, path));
     CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
@@ -638,19 +662,22 @@ TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks corre
     CHECK(StrEqual(appState.outputFolder, "C:\\EasyCompTemp"));
     this->CleanupCreatedOutputFolder();
 
-    appState = {};
+    //appState = {};
+    ZeroMemory(&appState, sizeof(appState));
     this->WriteConfig("[Sizes]\n7.5\n    6.42\n");
     REQUIRE(LoadConfigFile(nullptr, &appState, path));
     CHECK(appState.defaultTargetSize == doctest::Approx(7.5f));
     this->CleanupCreatedOutputFolder();
 
-    appState = {};
+    //appState = {};
+    ZeroMemory(&appState, sizeof(appState));
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n4.0\n");
     REQUIRE(LoadConfigFile(nullptr, &appState, path));
     CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
     this->CleanupCreatedOutputFolder();
 
-    appState = {};
+    //appState = {};
+    ZeroMemory(&appState, sizeof(appState));
     this->WriteConfig("[Sizes]\n2.\n[Codecs]");
     REQUIRE(LoadConfigFile(nullptr, &appState, path));
     CHECK(appState.defaultTargetSize == doctest::Approx(2.0f));

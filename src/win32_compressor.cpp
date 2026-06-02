@@ -321,7 +321,8 @@ AddJob(AppState* appState, const wchar* path) {
     }
 
     UIJob* j = &appState->jobs[appState->jobCount];
-    *j = {};
+    //*j = {};
+    ZeroMemory(j, sizeof(*j));
 
     j->status = JobStatus::QUEUED;
     j->targetSizeMb = appState->defaultTargetSize;
