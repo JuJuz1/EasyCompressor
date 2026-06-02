@@ -25,6 +25,7 @@ rem build test-only -> run debug test
 rem build rel test-only -> run rel test
 rem "rel" can be replaced with "release" anytime
 
+rem have to do this to support arbitrary order of arguments...
 if "!arg1!" == "rel" (
     set config=release
 ) else if "!arg1!" == "release" (
@@ -33,11 +34,17 @@ if "!arg1!" == "rel" (
     set config=release
 ) else if "!arg2!" == "release" (
     set config=release
+) else if "!arg3!" == "rel" (
+    set config=release
+) else if "!arg3!" == "release" (
+    set config=release
 )
 
 if "!arg1!" == "test" (
     set modeTest=1
 ) else if "!arg2!" == "test" (
+    set modeTest=1
+) else if "!arg3!" == "test" (
     set modeTest=1
 )
 
@@ -48,9 +55,11 @@ if "!arg1!" == "test-only" (
 ) else if "!arg2!" == "test-only" (
     set modeApp=0
     set modeTest=1
+) else if "!arg3!" == "test-only" (
+    set modeApp=0
+    set modeTest=1
 )
 
-rem IMPORTANT: no-ctime should always be last arg!
 rem can be manually disabled
 if "!arg1!" == "no-ctime" (
     set modeUseCTime=0
@@ -66,8 +75,10 @@ if !modeUseCTime! == 1 (
         if exist ..\vendor\ctime.exe (
             copy ..\vendor\ctime.exe ctime.exe >nul
             echo Copied ctime.exe to build
+            echo.
         ) else (
             echo ctime.exe not found in vendor, disabling ctime
+            echo.
             set modeUseCTime=0
         )
     )
@@ -77,6 +88,7 @@ echo Config: !config!
 echo App: !modeApp!
 echo Test: !modeTest!
 echo CTime: !modeUseCTime!
+echo.
 
 rem /FAs /Fm, .asm and .map
 rem /LTCG link time optimization, not really used for unity builds I suppose
@@ -120,7 +132,7 @@ if !modeApp! == 1 (
     echo !flags!
 
     if !modeUseCTime! == 1 (
-        ctime.exe -begin timings_compressor.ctm
+        ctime.exe -begin timings.ctm
     )
 
     set BUILD_START=!TIME!
@@ -147,7 +159,7 @@ if !modeApp! == 1 (
     rem we measure here, it's close enough and works
     if !modeUseCTime! == 1 (
         rem we can pass success or failed to track
-        ctime -end timings_compressor.ctm !buildFailed!
+        ctime -end timings.ctm !buildFailed!
     )
 
     rem Don't remember the layout when testing UX
