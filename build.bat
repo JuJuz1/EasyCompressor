@@ -95,7 +95,8 @@ rem /LTCG link time optimization, not really used for unity builds I suppose
 rem not used: /Zc:__cplusplus
 
 rem TODO: remove debug from release
-set defines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_DEBUG=1
+rem test with DEBUG defined though as well
+set defines=-DCOMPRESSOR_WIN32=1
 rem /Bt+ compile times
 set flags=/W4 /FC /Oi /EHa- /GR- /GS /std:c++20 /utf-8 /nologo
 
@@ -110,7 +111,7 @@ if !config! == debug (
     set flags=!flags! /MTd /Od /Zi
 ) else if !config! == release (
     rem /MT /O2
-    set flags=!flags! /MD /Od
+    set flags=!flags! /MT /O2
 )
 
 set flagsCombined=!defines! !flags!
@@ -131,9 +132,8 @@ if !modeApp! == 1 (
     echo !defines!
     echo !flags!
 
-    rem TODO: seperate based on debug/release??
     if !modeUseCTime! == 1 (
-        ctime.exe -begin timings.ctm
+        ctime.exe -begin timings_!config!.ctm
     )
 
     set BUILD_START=!TIME!
@@ -142,7 +142,7 @@ if !modeApp! == 1 (
     /link !linkerFlags! !win32Libraries! !dxLibraries!
 
     rem if !modeUseCTime! == 0 (
-    rem     rem TODO: doesn't work?
+    rem     rem TODO: doesn't work? have to do after: if ERRORLEVEL 1 ?
     rem     set lastError=%ERRORLEVEL%
     rem     echo !lastError!
     rem     ctime.exe -end timings.ctm %lastError%
@@ -160,7 +160,7 @@ if !modeApp! == 1 (
     rem we measure here, it's close enough and works
     if !modeUseCTime! == 1 (
         rem we can pass success or failed to track
-        ctime -end timings.ctm !buildFailed!
+        ctime -end timings_!config!.ctm !buildFailed!
     )
 
     rem Don't remember the layout when testing UX
@@ -190,7 +190,7 @@ if !modeTest! == 1 if !buildFailed! == 0 (
     set flagsCombined=!defines! !flags!
 
     if !modeUseCTime! == 1 (
-        ctime.exe -begin timings_tests.ctm
+        ctime.exe -begin timings_tests_!config!.ctm
     )
 
     set TEST_BUILD_START=!TIME!
@@ -207,7 +207,7 @@ if !modeTest! == 1 if !buildFailed! == 0 (
     )
 
     if !modeUseCTime! == 1 (
-        ctime -end timings_tests.ctm !buildFailed!
+        ctime -end timings_tests_!config!.ctm !buildFailed!
     )
 
     set NOW=!TIME:~0,8!
@@ -222,8 +222,9 @@ if !modeTest! == 1 if !buildFailed! == 0 (
         rem probably have to introduce custom main() and measure there
         rem --duration only shows time per test
         rem Currently done via .bat logic which is truly something, see below
+        rem Using ctime seems to work correctly and above all most accurately!
         if !modeUseCTime! == 1 (
-            ctime -begin timings_tests_run.ctm
+            ctime -begin timings_tests_run_!config!.ctm
         )
 
         set TEST_RUN_START=!TIME!
@@ -235,8 +236,9 @@ if !modeTest! == 1 if !buildFailed! == 0 (
         rem TODO: not sure if this outputs correct duration of running the tests...
         rem seems to be quite low like 0.063 s, the .bat dirty way is like 0.6 s, seems way off
         rem building seems to produce correct results though
+        rem the ctime one seems most accurate!
         if !modeUseCTime! == 1 (
-            ctime -end timings_tests_run.ctm
+            ctime -end timings_tests_run_!config!.ctm
         )
 
     )
