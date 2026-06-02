@@ -6,10 +6,12 @@ pushd build
 
 set arg1=%1
 set arg2=%2
+set arg3=%3
 
 set config=debug
 set modeApp=1
 set modeTest=0
+set modeUseCTime=1
 
 rem default modeApp: 1 modeTest: 0
 rem build test: modeApp: 1 modeTest: 1
@@ -48,9 +50,33 @@ if "!arg1!" == "test-only" (
     set modeTest=1
 )
 
+rem IMPORTANT: no-ctime should always be last arg!
+rem can be manually disabled
+if "!arg1!" == "no-ctime" (
+    set modeUseCTime=0
+) else if "!arg2!" == "no-ctime" (
+    set modeUseCTime=0
+) else if "!arg3!" == "no-ctime" (
+    set modeUseCTime=0
+)
+
+rem just disable if not found
+if !modeUseCTime! == 1 (
+    if not exist ctime.exe (
+        if exist ..\vendor\ctime.exe (
+            copy ..\vendor\ctime.exe ctime.exe >nul
+            echo Copied ctime.exe to build
+        ) else (
+            echo ctime.exe not found in vendor, disabling ctime
+            set modeUseCTime=0
+        )
+    )
+)
+
 echo Config: !config!
 echo App: !modeApp!
 echo Test: !modeTest!
+echo CTime: !modeUseCTime!
 
 rem /FAs /Fm, .asm and .map
 rem /LTCG link time optimization, not really used for unity builds I suppose
@@ -93,9 +119,22 @@ if !modeApp! == 1 (
     echo !defines!
     echo !flags!
 
+    if !modeUseCTime! == 1 (
+        ctime.exe -begin timings_compressor.ctm
+    )
+
     set BUILD_START=!TIME!
+
     cl !flagsCombined! ../src/win32_compressor.cpp /I ../src /I ../vendor/imgui ^
     /link !linkerFlags! !win32Libraries! !dxLibraries!
+
+    rem if !modeUseCTime! == 0 (
+    rem     rem TODO: doesn't work?
+    rem     set lastError=%ERRORLEVEL%
+    rem     echo !lastError!
+    rem     ctime.exe -end timings.ctm %lastError%
+    rem )
+
     set BUILD_END=!TIME!
 
     set NOW=!TIME:~0,8!
@@ -103,6 +142,12 @@ if !modeApp! == 1 (
     if ERRORLEVEL 1 (
         set buildFailed=1
         echo [31m[1mwin32_compressor.cpp failed[0m[1m
+    )
+
+    rem we measure here, it's close enough and works
+    if !modeUseCTime! == 1 (
+        rem we can pass success or failed to track
+        ctime -end timings_compressor.ctm !buildFailed!
     )
 
     rem Don't remember the layout when testing UX
@@ -119,7 +164,9 @@ if !modeApp! == 1 (
 )
 
 if !buildFailed! == 0 if !modeApp! == 1 (
-    call :OutputCommandTime "!BUILD_START!" "!BUILD_END!" "Build" !modeApp!
+    if !modeUseCTime! == 0 (
+        call :OutputCommandTime "!BUILD_START!" "!BUILD_END!" "Build"
+    )
 )
 
 if !modeTest! == 1 if !buildFailed! == 0 (
@@ -130,13 +177,29 @@ if !modeTest! == 1 if !buildFailed! == 0 (
     echo !flags!
     set flagsCombined=!defines! !flags!
 
+    if !modeUseCTime! == 1 (
+        ctime.exe -begin timings_tests.ctm
+    )
+
     set TEST_BUILD_START=!TIME!
+
     rem /wd4505 unreferenced internal function removed
     cl !flagsCombined! /wd4505 ../src/compressor_tests.cpp /I ../src /I ../vendor ^
     /link /SUBSYSTEM:CONSOLE !win32Libraries!
+
     set TEST_BUILD_END=!TIME!
 
+    rem this is done as duplicate to get buildFailed for ctime correctly
+    if ERRORLEVEL 1 (
+        set buildFailed=1
+    )
+
+    if !modeUseCTime! == 1 (
+        ctime -end timings_tests.ctm !buildFailed!
+    )
+
     set NOW=!TIME:~0,8!
+
     if ERRORLEVEL 1 (
         echo [31m[1mtests.cpp failed[0m[1m !DATE! !NOW!
         set buildFailed=1
@@ -147,16 +210,32 @@ if !modeTest! == 1 if !buildFailed! == 0 (
         rem probably have to introduce custom main() and measure there
         rem --duration only shows time per test
         rem Currently done via .bat logic which is truly something, see below
+        if !modeUseCTime! == 1 (
+            ctime -begin timings_tests_run.ctm
+        )
+
         set TEST_RUN_START=!TIME!
+
         compressor_tests.exe --no-intro
+
         set TEST_RUN_END=!TIME!
+
+        rem TODO: not sure if this outputs correct duration of running the tests...
+        rem seems to be quite low like 0.063 s, the .bat dirty way is like 0.6 s, seems way off
+        rem building seems to produce correct results though
+        if !modeUseCTime! == 1 (
+            ctime -end timings_tests_run.ctm
+        )
+
     )
 )
 
 if !buildFailed! == 0 if !modeTest! == 1 (
-    echo.
-    call :OutputCommandTime "!TEST_BUILD_START!" "!TEST_BUILD_END!" "Test build"
-    call :OutputCommandTime "!TEST_RUN_START!" "!TEST_RUN_END!" "Test run"
+    if !modeUseCTime! == 0 (
+        echo.
+        call :OutputCommandTime "!TEST_BUILD_START!" "!TEST_BUILD_END!" "Test build"
+        call :OutputCommandTime "!TEST_RUN_START!" "!TEST_RUN_END!" "Test run"
+    )
 )
 
 popd
@@ -171,7 +250,12 @@ echo [32m[1mBUILD SUCCESS[0m[1m
 exit /b 0
 
 
+
+rem -----------------FUNCTIONS-----------------
+
 rem Really? A function in a .bat? YES
+rem Currently works as a backup timing utility if we don't have/want to use ctime.exe
+rem Seems to sometimes be way off compared to ctime.exe, like ctime: 1.093 vs 1.9???
 :OutputCommandTime
 set START=%~1
 set END=%~2
@@ -211,6 +295,6 @@ set /a ELAPSED=ELAPSED+DIFF_MS 2>nul
 set /a SECS=ELAPSED/100 2>nul
 set /a CS=ELAPSED%%100 2>nul
 
-echo !TEXT!: !SECS!.!CS!s
+echo !TEXT!: !SECS!.!CS! s
 
 goto :eof

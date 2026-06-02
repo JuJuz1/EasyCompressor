@@ -64,6 +64,11 @@ vendor/*
 !vendor/DOCTEST_LICENSE
 !vendor/NotoSans-Regular.ttf
 
+# ctime source, binary and build script
+!vendor/ctime.c
+!vendor/ctime.exe
+!vendor/build_ctime.bat
+
 # ffmpeg logs
 *.log
 *.log.mbtree
