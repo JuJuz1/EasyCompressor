@@ -58,6 +58,7 @@ rem not used: /Zc:__cplusplus
 
 rem TODO: remove debug from release
 set defines=-DCOMPRESSOR_WIN32=1 -DCOMPRESSOR_DEBUG=1
+rem /Bt+ compile times
 set flags=/W4 /FC /Oi /EHa- /GR- /GS /std:c++20 /utf-8 /nologo
 
 rem Couldn't get AddressSanitizer to be found automatically
@@ -79,7 +80,8 @@ set flagsCombined=!defines! !flags!
 rem TODO: take a look at /FIXED
 rem TODO: examine flags that might make Microsoft Defender flag as a virus
 rem set linkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:REF /OPT:ICF /FIXED /merge:_RDATA=.rdata /SUBSYSTEM:WINDOWS
-set linkerFlags=/SUBSYSTEM:WINDOWS
+set linkerFlags=/INCREMENTAL:NO /NOCOFFGRPINFO /EMITTOOLVERSIONINFO:NO /OPT:REF /OPT:ICF /SUBSYSTEM:WINDOWS
+rem set linkerFlags=/SUBSYSTEM:WINDOWS
 
 rem libraries
 set win32Libraries=Kernel32.lib User32.lib Shell32.lib Comdlg32.lib Shlwapi.lib Pathcch.lib
@@ -88,13 +90,15 @@ set dxLibraries=d3d11.lib dxgi.lib d3dcompiler.lib
 set buildFailed=0
 
 if !modeApp! == 1 (
-    if exist *.pdb del /q win32_compressor.pdb
-
     echo !defines!
     echo !flags!
 
+    set BUILD_START=!TIME!
     cl !flagsCombined! ../src/win32_compressor.cpp /I ../src /I ../vendor/imgui ^
     /link !linkerFlags! !win32Libraries! !dxLibraries!
+    set BUILD_END=!TIME!
+
+    set NOW=!TIME:~0,8!
 
     if ERRORLEVEL 1 (
         set buildFailed=1
@@ -114,7 +118,11 @@ if !modeApp! == 1 (
     )
 )
 
-if !modeTest! == 1 (
+if !buildFailed! == 0 if !modeApp! == 1 (
+    call :OutputCommandTime "!BUILD_START!" "!BUILD_END!" "Build" !modeApp!
+)
+
+if !modeTest! == 1 if !buildFailed! == 0 (
     echo.
     echo Building tests...
     set defines=!defines! -DCOMPRESSOR_TESTS=1
@@ -122,8 +130,12 @@ if !modeTest! == 1 (
     echo !flags!
     set flagsCombined=!defines! !flags!
 
+    set TEST_BUILD_START=!TIME!
+    rem /wd4505 unreferenced internal function removed
     cl !flagsCombined! /wd4505 ../src/compressor_tests.cpp /I ../src /I ../vendor ^
     /link /SUBSYSTEM:CONSOLE !win32Libraries!
+    set TEST_BUILD_END=!TIME!
+
     set NOW=!TIME:~0,8!
     if ERRORLEVEL 1 (
         echo [31m[1mtests.cpp failed[0m[1m !DATE! !NOW!
@@ -134,14 +146,17 @@ if !modeTest! == 1 (
         rem TODO: figure out a way to show total time taken for tests
         rem probably have to introduce custom main() and measure there
         rem --duration only shows time per test
+        rem Currently done via .bat logic which is truly something, see below
+        set TEST_RUN_START=!TIME!
         compressor_tests.exe --no-intro
-        if ERRORLEVEL 1 (
-            set buildFailed=1
-            echo [31m[1mTests failed[0m[1m !DATE! !NOW!
-        ) else (
-            echo [32m[1mTests passed[0m[1m !DATE! !NOW!
-        )
+        set TEST_RUN_END=!TIME!
     )
+)
+
+if !buildFailed! == 0 if !modeTest! == 1 (
+    echo.
+    call :OutputCommandTime "!TEST_BUILD_START!" "!TEST_BUILD_END!" "Test build"
+    call :OutputCommandTime "!TEST_RUN_START!" "!TEST_RUN_END!" "Test run"
 )
 
 popd
@@ -154,3 +169,48 @@ if !buildFailed! NEQ 0 (
 
 echo [32m[1mBUILD SUCCESS[0m[1m
 exit /b 0
+
+
+rem Really? A function in a .bat? YES
+:OutputCommandTime
+set START=%~1
+set END=%~2
+set TEXT=%~3
+
+rem I mean wtf is this, it works though...
+for /f "tokens=1-4 delims=:,." %%a in ("!START!") do (
+    set S_H=%%a
+    set S_M=%%b
+    set S_S=%%c
+    set S_MS=%%d
+)
+
+for /f "tokens=1-4 delims=:,." %%a in ("!END!") do (
+    set E_H=%%a
+    set E_M=%%b
+    set E_S=%%c
+    set E_MS=%%d
+)
+
+set /a S_H=1%S_H%-100 2>nul
+set /a S_M=1%S_M%-100 2>nul
+set /a S_S=1%S_S%-100 2>nul
+set /a S_MS=1%S_MS%-100 2>nul
+set /a E_H=1%E_H%-100 2>nul
+set /a E_M=1%E_M%-100 2>nul
+set /a E_S=1%E_S%-100 2>nul
+set /a E_MS=1%E_MS%-100 2>nul
+set /a DIFF_H=E_H-S_H 2>nul
+set /a DIFF_M=E_M-S_M 2>nul
+set /a DIFF_S=E_S-S_S 2>nul
+set /a DIFF_MS=E_MS-S_MS 2>nul
+set /a ELAPSED=DIFF_H*360000 2>nul
+set /a ELAPSED=ELAPSED+DIFF_M*6000 2>nul
+set /a ELAPSED=ELAPSED+DIFF_S*100 2>nul
+set /a ELAPSED=ELAPSED+DIFF_MS 2>nul
+set /a SECS=ELAPSED/100 2>nul
+set /a CS=ELAPSED%%100 2>nul
+
+echo !TEXT!: !SECS!.!CS!s
+
+goto :eof

@@ -9,8 +9,10 @@ compression website I have used https://www.freeconvert.com/video-compressor Thi
 advantage of the precious hardware each one of us has!
 
 - The program depends on ffmpeg and ffprobe.
+- TODO: redistribute the binaries with a release build, or offer both with and without?
 
-TODO: redistribute the binaries with a release build, or offer both with and without?
+## Notable features
+- TODO
 
 ## Building locally
 
@@ -49,7 +51,7 @@ build.bat
 - If the requested size is too small for the video's length (would force video bitrate < 50 kbps),
   the tool aborts rather than produce garbage
 - Audio is re-encoded to AAC at 128 kbps (scaled to 64/32 kbps for very small targets)
-- Output container is deduced from the input file path. The app appends _compressed to the input
-  file name
+<!--- Output container is deduced from the input file path. The app appends _compressed to the input
+  file name-->
 <!--- Two passlog files (`compress_2pass-0.log*`) are created in the working directory during encoding
   and removed on success-->
