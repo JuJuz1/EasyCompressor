@@ -108,7 +108,7 @@ rem release: /MT /O2
 if !config! == debug (
     set defines=!defines! -DCOMPRESSOR_DEV=1 -DCOMPRESSOR_DEBUG=1
     rem /fsanitize=address
-    set flags=!flags! /MTd /Od /Zi
+    set flags=!flags! /MTd /Od /Zi /fsanitize=address
 ) else if !config! == release (
     rem /MT /O2
     set flags=!flags! /MT /O2

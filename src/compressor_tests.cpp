@@ -132,9 +132,9 @@ struct TempFileFixture {
         dir[val - 1] = '\0'; // Remove trailing slash...
         //CreateDirectoryW(dir, nullptr);
 
-        swprintf(path, ARR_COUNT(path), L"%ls\\test_fff.mp4", dir);
-        swprintf(path2, ARR_COUNT(path2), L"%ls\\tb.mp4", dir);
-        swprintf(path3, ARR_COUNT(path3), L"%ls\\ывьн.avi", dir);
+        _snwprintf_s(path, ARR_COUNT(path), L"%ls\\test_fff.mp4", dir);
+        _snwprintf_s(path2, ARR_COUNT(path2), L"%ls\\tb.mp4", dir);
+        _snwprintf_s(path3, ARR_COUNT(path3), L"%ls\\ывьн.avi", dir);
 
         CreateTestFile(path);
         CreateTestFile(path2);
@@ -385,6 +385,65 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob, RemoveJob and MoveJob work correctly")
     CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
 }
 
+TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles single file") {
+    wchar buff[MAX_PATH_COUNT];
+    _snwprintf_s(buff, ARR_COUNT(buff), L"%ls", this->path);
+
+    // Don't care what this ends up with
+    AddJobResult lastError;
+    // fileOffset points to the filename after the last backslash
+    UINT fileOffset = static_cast<UINT>((StrLengthW(this->dir) + 1)); // dir + '\' + fil)ename
+    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    CHECK(rejected == 0);
+    CHECK(appState.jobCount == 1);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles multiple files") {
+    wchar buff[MAX_PATH_COUNT * 3] = {};
+    // "C:\dir\0test_fff.mp4\0tb.mp4\0ывьн.avi\0\0"
+    UINT dirLen = static_cast<UINT>(StrLengthW(this->dir));
+    // This looks very ugly and errorprone
+    UINT off = 0;
+    wmemcpy(buff + off, this->dir, dirLen + 1);
+    off += dirLen + 1;
+    // IMPORTANT: these must match AddJobFixture path, path2 and path3 file names
+    wmemcpy(buff + off, L"test_fff.mp4", wcslen(L"test_fff.mp4") + 1);
+    off += static_cast<UINT>(wcslen(L"test_fff.mp4")) + 1;
+    wmemcpy(buff + off, L"tb.mp4", wcslen(L"tb.mp4") + 1);
+    off += static_cast<UINT>(wcslen(L"tb.mp4")) + 1;
+    wmemcpy(buff + off, L"ывьн.avi", wcslen(L"ывьн.avi") + 1);
+
+    AddJobResult lastError;
+    UINT fileOffset = dirLen + 1;
+    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    CHECK(rejected == 0);
+    CHECK(appState.jobCount == 3);
+}
+
+TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer rejects truncated path") {
+    // dir + \ + file must exceed MAX_PATH_COUNT
+    // dir = MAX_PATH_COUNT - 5 chars, file = "f.mp4" (5 chars)
+    // total = (MAX_PATH_COUNT - 5) + 1 + 5 = MAX_PATH_COUNT + 1 -> truncated
+    wchar buff[MAX_PATH_COUNT * 2] = {};
+
+    UINT dirLen = MAX_PATH_COUNT - 5;
+    for (UINT i = 0; i < dirLen; ++i) {
+        buff[i] = L'a';
+    }
+
+    buff[dirLen] = L'\0';
+
+    const wchar* filename = L"f.mp4";
+    UINT fileLen = static_cast<UINT>(wcslen(filename));
+    wmemcpy(buff + dirLen + 1, filename, fileLen + 1);
+
+    AddJobResult lastError;
+    UINT fileOffset = dirLen + 1;
+    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    CHECK(rejected == 1);
+    CHECK(appState.jobCount == 0);
+}
+
 /// -----------------------------------------------------------------------------
 /// Config file stuff
 /// -----------------------------------------------------------------------------
@@ -398,7 +457,7 @@ struct TempConfigFileFixture {
         i32 val = GetTempPathW(ARR_COUNT(dir), dir);
         REQUIRE(val != 0);
         dir[val - 1] = '\0';
-        swprintf(path, ARR_COUNT(path), L"%ls\\easycompressor.cfg", dir);
+        _snwprintf_s(path, ARR_COUNT(path), L"%ls\\easycompressor.cfg", dir);
 
         HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -580,7 +639,7 @@ struct LoadConfigFileFixture {
         i32 val = GetTempPathW(ARR_COUNT(dir), dir);
         REQUIRE(val != 0);
         dir[val - 1] = '\0';
-        swprintf(path, ARR_COUNT(path), L"%ls\\easycompressor_test.cfg", dir);
+        _snwprintf_s(path, ARR_COUNT(path), L"%ls\\easycompressor_test.cfg", dir);
     }
 
     ~LoadConfigFileFixture() { DeleteFileW(path); }

@@ -306,7 +306,7 @@ AddJob(AppState* appState, const wchar* path) {
     for (i32 i = 0; i < appState->jobCount; ++i) {
         UIJob* job = &appState->jobs[i];
         char buff[ARR_COUNT(job->input)];
-        UTF16To8(path, buff);
+        UTF16To8(path, buff, ARR_COUNT(buff));
         if (StrEqual(job->input, buff)) {
             return AddJobResult::DUPLICATE_JOB;
         }
@@ -314,7 +314,6 @@ AddJob(AppState* appState, const wchar* path) {
 
     // Reject inputs from default output folder to avoid name conflicts
     // TODO: Other approaches?
-
     if (IsPathFromOutputFolder(appState, path)) {
         DEBUG_PRINTF("Tried to input from default output folder\n");
         return AddJobResult::JOB_FROM_OUTPUT;
@@ -335,6 +334,7 @@ AddJob(AppState* appState, const wchar* path) {
         j->inputFileSize = static_cast<f32>(bytes) / (1024.0f * 1024.0f);
     } else {
         DEBUG_PRINT("Failed to get file size!\n");
+        // If the path is valid, why can't we get the file size...?
         INVALID_CODE_PATH;
     }
 
@@ -1137,10 +1137,59 @@ PickoutputFolder(HWND hWnd, AppState* appState) {
     }
 }
 
+static i32
+HandleOpenFileNameBuffer(AppState* appState, const wchar* buffer, UINT fileOffset,
+                         AddJobResult* lastErrorResult) {
+    // When multiple files are selected
+    // "C:\dir\0file1.mp4\0file2.mp4\0\0"
+    // When a single file selected
+    // "C:\dir\file1.mp4\0\0"
+    // We can see it ends with a double null termination
+    const wchar* dir = buffer;
+    const wchar* file = buffer + fileOffset; // Get the first file
+
+    i32 rejected = 0;
+
+    // Single file
+    if (*(file - 1) != L'\0') {
+        auto result = AddJob(appState, buffer);
+        if (result != AddJobResult::SUCCESS) {
+            *lastErrorResult = result;
+            ++rejected;
+        }
+    } else {
+        // Multiple files
+        while (*file) {
+            wchar fullW[MAX_PATH_COUNT];
+#if !COMPRESSOR_TESTS
+            i32 written = _snwprintf_s(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
+#else
+            // To prevent crash when truncation would happen due to test data
+            i32 written = _snwprintf_s(fullW, ARR_COUNT(fullW), _TRUNCATE, L"%ls\\%ls", dir, file);
+#endif
+            if (written < 0 || written >= ARR_COUNT(fullW)) {
+                ++rejected;
+                file += StrLengthW(file) + 1;
+                continue;
+            }
+
+            auto result = AddJob(appState, fullW);
+            if (result != AddJobResult::SUCCESS) {
+                *lastErrorResult = result;
+                ++rejected;
+            }
+
+            file += StrLengthW(file) + 1;
+        }
+    }
+
+    return rejected;
+}
+
 static void
 PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // TODO: Take care of stack size if MAX_PATH_COUNT is changed
-    wchar buffer[MAX_PATH_COUNT * ARR_COUNT(appState->jobs)] = {};
+    wchar buff[MAX_PATH_COUNT * ARR_COUNT(appState->jobs)] = {};
 
     OPENFILENAME ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -1153,9 +1202,9 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
                       "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
                       "All Files (*.*)\0"
                       "*.*\0";
-    ofn.lpstrFile = buffer;
+    ofn.lpstrFile = buff;
     ofn.lpstrTitle = L"Select input files";
-    ofn.nMaxFile = ARR_COUNT(buffer);
+    ofn.nMaxFile = ARR_COUNT(buff);
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
     ofn.lpstrDefExt = L"mp4";
 
@@ -1165,38 +1214,8 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
         return;
     }
 
-    // When multiple files are selected
-    // "C:\dir\0file1.mp4\0file2.mp4\0\0"
-    // When a single file selected
-    // "C:\dir\file1.mp4\0\0"
-    // We can see it ends with a double null termination
-    const wchar* dir = buffer;
-    const wchar* file = buffer + ofn.nFileOffset; // Get the first file
-
-    i32 rejected = 0;
     AddJobResult lastErrorResult = AddJobResult::SUCCESS;
-
-    // Single file
-    if (*(file - 1) != L'\0') {
-        auto result = AddJob(appState, buffer);
-        if (result != AddJobResult::SUCCESS) {
-            lastErrorResult = result;
-            ++rejected;
-        }
-    } else {
-        // Multiple files
-        while (*file) {
-            wchar fullW[MAX_PATH_COUNT];
-            _snwprintf_s(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
-            auto result = AddJob(appState, fullW);
-            if (result != AddJobResult::SUCCESS) {
-                lastErrorResult = result;
-                ++rejected;
-            }
-
-            file += StrLengthW(file) + 1;
-        }
-    }
+    i32 rejected = HandleOpenFileNameBuffer(appState, buff, ofn.nFileOffset, &lastErrorResult);
 
     HandleAddJobResults(appState, rejected, lastErrorResult);
 }
@@ -2695,6 +2714,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
             if (msg.message == WM_QUIT) {
+                DEBUG_PRINT("WM_QUIT\n");
                 running = false;
             }
         }

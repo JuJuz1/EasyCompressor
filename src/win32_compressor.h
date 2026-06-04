@@ -28,7 +28,7 @@ enum class AddJobResult : u8 {
 
 // Has to be enough, including null terminator
 // MAX_PATH is 260 defined by Windows
-// TODO: if we want to support UNICODE wide paths (32 767 characters), would need to allocate memory
+// TODO: if we want to support wide paths (32 767 characters), would need to allocate heap memory
 // https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
 #define MAX_PATH_COUNT 512
 
@@ -64,7 +64,7 @@ struct UIJob {
 
 #define TARGET_SIZES_COUNT 5
 
-#define CONFIG_FILE_MAX_SIZE 1024 + MAX_PATH_COUNT
+#define CONFIG_FILE_MAX_SIZE (1024 + MAX_PATH_COUNT)
 
 // Mainly for popup dialogs
 struct UIState {
