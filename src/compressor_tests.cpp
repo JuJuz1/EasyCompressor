@@ -796,4 +796,239 @@ TEST_SUITE_END();
 /// Arena
 /// -----------------------------------------------------------------------------
 
-// TODO:
+TEST_SUITE_BEGIN("Arena");
+
+struct ArenaFixture {
+    static constexpr u64 arenaSize = 1024;
+    u8 buff[arenaSize];
+    Arena arena;
+
+    ArenaFixture() {
+        ZeroMemory(buff, sizeof(buff));
+        InitArena(&arena, buff, arenaSize);
+    }
+};
+
+struct TestStruct {
+    i32 a;
+    float b;
+    u64 c;
+};
+
+TEST_CASE_FIXTURE(ArenaFixture, "InitArena sets fields correctly") {
+    CHECK(arena.base == buff);
+    CHECK(arena.used == 0);
+    CHECK(arena.size == arenaSize);
+    CHECK(arena.totalUsed == 0);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush returns pointer to base on first alloc") {
+    u8* p = PushArray(&arena, u8, 8);
+    CHECK(p == buff);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush advances used by requested size") {
+    PushArray(&arena, u8, 16);
+    CHECK(arena.used == 16);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush returns non-overlapping pointers") {
+    u8* p1 = PushArray(&arena, u8, 32);
+    u8* p2 = PushArray(&arena, u8, 32);
+    CHECK(p2 == p1 + 32);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush accumulates totalUsed") {
+    PushArray(&arena, u8, 16);
+    PushArray(&arena, u8, 32);
+    CHECK(arena.totalUsed == 48);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush of size 1 works") {
+    u8* p = PushArray(&arena, u8, 1);
+    CHECK(p != nullptr);
+    CHECK(arena.used == 1);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush fills exactly to capacity") {
+    u8* p = PushArray(&arena, u8, arenaSize);
+    CHECK(p == buff);
+    CHECK(arena.used == arenaSize);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush multiple times up to capacity") {
+    u64 chunk = 64;
+    u64 count = arenaSize / chunk;
+    for (u64 i = 0; i < count; ++i) {
+        u8* p = PushArray(&arena, u8, chunk);
+        CHECK(p == buff + i * chunk);
+    }
+
+    CHECK(arena.used == arenaSize);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPushZero returns zeroed memory") {
+    memset(buff, 0xCD, arenaSize);
+    for (i32 i = 0; i < arenaSize; ++i) {
+        REQUIRE(buff[i] == 0xCD);
+    }
+
+    u8* p = PushArrayZero(&arena, u8, 32);
+    for (i32 i = 0; i < 32; ++i) {
+        CHECK(p[i] == 0);
+    }
+
+    for (i32 i = 32; i < arenaSize; ++i) {
+        CHECK(p[i] == 0xCD);
+    }
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPushZero advances used correctly") {
+    PushArrayZero(&arena, u8, 64);
+    CHECK(arena.used == 64);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop decreases used") {
+    PushArray(&arena, u8, 64);
+    ArenaPop(&arena, 32);
+    CHECK(arena.used == 32);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop of full push returns to zero") {
+    PushArray(&arena, u8, 64);
+    ArenaPop(&arena, 64);
+    CHECK(arena.used == 0);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop then push reuses memory") {
+    u8* p1 = PushArray(&arena, u8, 64);
+    ArenaPop(&arena, 64);
+    u8* p2 = PushArray(&arena, u8, 64);
+    CHECK(p1 == p2);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop does not affect totalUsed") {
+    PushArray(&arena, u8, 64);
+    u64 totalBefore = arena.totalUsed;
+    ArenaPop(&arena, 64);
+    CHECK(arena.totalUsed == totalBefore);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear resets used to zero") {
+    PushArray(&arena, u8, 128);
+    PushArray(&arena, u8, 64);
+    ArenaClear(&arena);
+    CHECK(arena.used == 0);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear does not reset totalUsed") {
+    PushArray(&arena, u8, 128);
+    u64 totalBefore = arena.totalUsed;
+    ArenaClear(&arena);
+    CHECK(arena.totalUsed == totalBefore);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear allows full reuse of bufffer") {
+    PushArray(&arena, u8, arenaSize);
+    ArenaClear(&arena);
+    u8* p = PushArray(&arena, u8, arenaSize);
+    CHECK(p == buff);
+    CHECK(arena.used == arenaSize);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaGetPos returns current used") {
+    PushArray(&arena, u8, 48);
+    CHECK(ArenaGetPos(&arena) == 48);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaSetPos restores position") {
+    PushArray(&arena, u8, 128);
+    u64 mark = ArenaGetPos(&arena);
+    PushArray(&arena, u8, 256);
+    ArenaSetPos(&arena, mark);
+    CHECK(arena.used == 128);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaSetPos then push reuses memory from that point") {
+    PushArray(&arena, u8, 128);
+    u64 mark = ArenaGetPos(&arena);
+    PushArray(&arena, u8, 64);
+    ArenaSetPos(&arena, mark);
+    u8* p = PushArray(&arena, u8, 64);
+    CHECK(p == buff + 128);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaSetPos to zero allows full reuse") {
+    PushArray(&arena, u8, arenaSize / 2);
+    ArenaSetPos(&arena, 0);
+    CHECK(arena.used == 0);
+    u8* p = PushArray(&arena, u8, arenaSize);
+    CHECK(p == buff);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "PushArray returns typed pointer and correct size") {
+    i32* arr = PushArray(&arena, i32, 4);
+    CHECK(arr != nullptr);
+    CHECK(arena.used == sizeof(i32) * 4);
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    CHECK(arr[0] == 10);
+    CHECK(arr[3] == 40);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "PushStruct returns pointer of correct size") {
+    TestStruct* s = PushStruct(&arena, TestStruct);
+    CHECK(s != nullptr);
+    CHECK(arena.used == sizeof(TestStruct));
+    s->a = 1;
+    s->b = 2.0f;
+    s->c = 3;
+    CHECK(s->a == 1);
+    CHECK(s->b == doctest::Approx(2.0f));
+    CHECK(s->c == 3);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "PushStructZero returns zeroed struct") {
+    memset(buff, 0xFF, arenaSize);
+
+    TestStruct* s = PushStructZero(&arena, TestStruct);
+    CHECK(s->a == 0);
+    CHECK(s->b == doctest::Approx(0.0f));
+    CHECK(s->c == 0);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "Scratch pattern: push pop leaves arena unchanged") {
+    PushArray(&arena, u8, 32);
+    u64 usedBefore = arena.used;
+
+    char* tmp = PushArray(&arena, char, 64);
+    _snprintf_s(tmp, 64, _TRUNCATE, "temporary string");
+    ArenaPop(&arena, 64);
+
+    CHECK(arena.used == usedBefore);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "Scratch pattern: save restore via GetPos SetPos") {
+    PushArray(&arena, u8, 32);
+    u64 mark = ArenaGetPos(&arena);
+
+    PushArray(&arena, char, 128);
+    PushArray(&arena, i32, 16);
+
+    ArenaSetPos(&arena, mark);
+    CHECK(arena.used == 32);
+}
+
+TEST_CASE_FIXTURE(ArenaFixture, "Scratch pattern: multiple scratch allocs then clear") {
+    for (i32 frame = 0; frame < 8; ++frame) {
+        PushArray(&arena, char, 64);
+        PushArray(&arena, TestStruct, 4);
+        PushArray(&arena, i32, 16);
+        ArenaClear(&arena);
+        CHECK(arena.used == 0);
+    }
+}
+
+TEST_SUITE_END();
