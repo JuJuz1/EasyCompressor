@@ -1,0 +1,69 @@
+#pragma once
+
+struct Arena {
+    u8* base;
+    u64 used;
+    u64 size;
+
+    // Debug
+    u64 totalUsed; // Accumulated used
+};
+
+static void
+InitArena(Arena* arena, void* base, u64 size) {
+    arena->base = static_cast<u8*>(base);
+    arena->used = 0;
+    arena->size = size;
+
+    arena->totalUsed = 0;
+}
+
+static void*
+ArenaPush(Arena* arena, u64 size) {
+    ASSERT(arena->used + size <= arena->size);
+    //if (arena->used + size > arena->size) {
+    //DEBUG_PRINT("ArenaPush: Out of memory!\n");
+    //PrintArena(arena); nocheckin
+    //ExitProcess(1);
+    //}
+
+    void* result = arena->base + arena->used;
+    arena->used += size;
+    arena->totalUsed += size;
+    return result;
+}
+
+static void*
+ArenaPushZero(Arena* arena, u64 size) {
+    void* result = ArenaPush(arena, size);
+    ZeroMemory(result, size);
+    return result;
+}
+
+static void
+ArenaPop(Arena* arena, u64 size) {
+    ASSERT(arena->used >= size);
+    arena->used -= size;
+}
+
+static void
+ArenaClear(Arena* arena) {
+    arena->used = 0;
+}
+
+static u64
+ArenaGetPos(Arena* arena) {
+    return arena->used;
+}
+
+static void
+ArenaSetPos(Arena* arena, u64 pos) {
+    // It would be a programmer error to set equal to size
+    ASSERT(pos >= 0 && pos < arena->size);
+    arena->used = pos;
+}
+
+#define PushArray(arena, type, count) (type*)ArenaPush((arena), sizeof(type) * (count))
+#define PushArrayZero(arena, type, count) (type*)ArenaPushZero((arena), sizeof(type) * (count))
+#define PushStruct(arena, type) PushArray((arena), type, 1)
+#define PushStructZero(arena, type) PushArrayZero((arena), type, 1)

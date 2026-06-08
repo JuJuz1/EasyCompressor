@@ -59,6 +59,7 @@
 
 #include "compressor.h"
 
+#include "arena.h"
 #include "win32_compressor.h"
 
 // 😈, works :)
@@ -243,7 +244,8 @@ ConstructPathsForJob(AppState* appState, UIJob* j, const wchar* path) {
     // TODO: this probably suffices as we don't have to do any string processing really
     // Just always use the output folder specified and remove the checkbox
     if (lastSlash) {
-        _snprintf_s(j->output, ARR_COUNT(j->output), "%s\\%s", appState->outputFolder, lastSlash);
+        _snprintf_s(j->output, MAX_PATH_COUNT, _TRUNCATE, "%s\\%s", appState->outputFolder,
+                    lastSlash);
     } else {
         INVALID_CODE_PATH;
     }
@@ -286,12 +288,14 @@ static bool32
 IsPathFromOutputFolder(AppState* appState, const wchar* path) {
     i32 amount = StrLengthW(path);
     ASSERT(amount >= 0 && amount < MAX_PATH_COUNT);
-    wchar pathW[MAX_PATH_COUNT];
+    //wchar pathW[MAX_PATH_COUNT];
+    wchar* pathW = PushArray(&appState->scratchArena, wchar, MAX_PATH_COUNT);
     // Include null term and as it's wide we have to multiply by the size
     CopyMemory(pathW, path, (amount + 1) * sizeof(wchar));
     // This removes the file or a folder, so any last "element" of the path
-    PathCchRemoveFileSpec(pathW, ARR_COUNT(pathW));
-    char copy[MAX_PATH_COUNT];
+    PathCchRemoveFileSpec(pathW, MAX_PATH_COUNT);
+    //char copy[MAX_PATH_COUNT];
+    char* copy = PushArray(&appState->scratchArena, char, MAX_PATH_COUNT);
     UTF16To8(pathW, copy);
     return StrEqual(copy, appState->outputFolder);
 }
@@ -305,9 +309,13 @@ AddJob(AppState* appState, const wchar* path) {
 
     for (i32 i = 0; i < appState->jobCount; ++i) {
         UIJob* job = &appState->jobs[i];
-        char buff[ARR_COUNT(job->input)];
-        UTF16To8(path, buff, ARR_COUNT(buff));
-        if (StrEqual(job->input, buff)) {
+        //char buff[ARR_COUNT(job->input)];
+        char* buff = PushArray(&appState->scratchArena, char, MAX_PATH_COUNT);
+        //UTF16To8(path, buff, ARR_COUNT(buff));
+        UTF16To8(path, buff, MAX_PATH_COUNT);
+        bool32 equal = StrEqual(job->input, buff);
+        ArenaPop(&appState->scratchArena, MAX_PATH_COUNT);
+        if (equal) {
             return AddJobResult::DUPLICATE_JOB;
         }
     }
@@ -321,7 +329,14 @@ AddJob(AppState* appState, const wchar* path) {
 
     UIJob* j = &appState->jobs[appState->jobCount];
     //*j = {};
+
+    // We have to save the permanent storage locations
+    char* inputAddress = j->input;
+    char* outputAddress = j->output;
     ZeroMemory(j, sizeof(*j));
+    j->input = inputAddress;
+    j->output = outputAddress;
+    ASSERT(j->input != nullptr && j->output != nullptr);
 
     j->status = JobStatus::QUEUED;
     j->targetSizeMb = appState->defaultTargetSize;
@@ -357,7 +372,16 @@ RemoveJob(AppState* appState, i32 index) {
     i32 newJobCount = appState->jobCount - 1;
     ASSERT(newJobCount >= 0);
     for (i32 i = index; i < newJobCount; ++i) {
+        char* inputAddress = appState->jobs[i].input;
+        char* outputAddress = appState->jobs[i].output;
+
         appState->jobs[i] = appState->jobs[i + 1];
+        // Copy string contents
+        _snprintf_s(inputAddress, MAX_PATH_COUNT, _TRUNCATE, "%s", appState->jobs[i + 1].input);
+        _snprintf_s(outputAddress, MAX_PATH_COUNT, _TRUNCATE, "%s", appState->jobs[i + 1].output);
+
+        appState->jobs[i].input = inputAddress;
+        appState->jobs[i].output = outputAddress;
     }
 
     _InterlockedExchange(&appState->jobCount, newJobCount);
@@ -969,8 +993,10 @@ HandleAddJobResults(AppState* appState, i32 rejected, AddJobResult lastErrorResu
 
 static void
 GetExeDirectory(AppState* appState) {
-    wchar exeDir[ARR_COUNT(appState->exeDir)];
-    GetModuleFileNameW(nullptr, exeDir, MAX_PATH_COUNT);
+    u64 size = MAX_PATH_COUNT;
+    wchar* exeDir = PushArray(&appState->scratchArena, wchar, size);
+    //wchar exeDir[ARR_COUNT(appState->exeDir)];
+    GetModuleFileNameW(nullptr, exeDir, static_cast<DWORD>(size));
 
     //UTF16To8Fixed(exeDir, appState->exeDir, ARR_COUNT(appState->exeDir));
     UTF16To8(exeDir, appState->exeDir);
@@ -986,27 +1012,35 @@ GetExeDirectory(AppState* appState) {
     if (lastSlashIndex >= 0) {
         appState->exeDir[lastSlashIndex] = '\0';
     }
+
+    ArenaPop(&appState->scratchArena, size);
 }
 
 static void
-SelectInExplorer(HWND hWnd, const char* path) {
-    wchar pathW[MAX_PATH_COUNT];
+SelectInExplorer(HWND hWnd, Arena* arena, const char* path) {
+    // TODO: scratch arena needed?
+    wchar* pathW = PushArray(arena, wchar, MAX_PATH_COUNT);
+    //wchar pathW[MAX_PATH_COUNT];
     UTF8To16(path, pathW);
-    wchar cmd[MAX_PATH_COUNT];
-    _snwprintf_s(cmd, ARR_COUNT(cmd), L"/select,\"%ls\"", pathW);
+    //wchar cmd[MAX_PATH_COUNT];
+    wchar* cmd = PushArray(arena, wchar, MAX_PATH_COUNT);
+    _snwprintf_s(cmd, MAX_PATH_COUNT, _TRUNCATE, L"/select,\"%ls\"", pathW);
     ShellExecuteW(hWnd, L"open", L"explorer.exe", cmd, nullptr, SW_SHOWNORMAL);
 }
 
 static void
-OpenInExplorer(HWND hWnd, const char* path) {
-    wchar pathW[MAX_PATH_COUNT];
+OpenInExplorer(HWND hWnd, Arena* arena, const char* path) {
+    // TODO: scratch arena needed?
+    wchar* pathW = PushArray(arena, wchar, MAX_PATH_COUNT);
     UTF8To16(path, pathW);
     ShellExecuteW(hWnd, L"open", L"explorer.exe", pathW, nullptr, SW_SHOWNORMAL);
 }
 
 static void
-PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
-    wchar buffer[MAX_PATH_COUNT] = {};
+PickOutputFile(HINSTANCE hInstance, HWND hWnd, Arena* arena, char* outPath) {
+    // TODO: scratch arena needed?
+    //wchar buff[MAX_PATH_COUNT] = {};
+    wchar* buff = PushArrayZero(arena, wchar, MAX_PATH_COUNT);
 
     OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -1020,9 +1054,9 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
                       "*.mp4;*.mov;*.mkv;*.avi;*.webm\0"
                       "All Files (*.*)\0"
                       "*.*\0";
-    ofn.lpstrFile = buffer;
+    ofn.lpstrFile = buff;
     ofn.lpstrTitle = L"Select output file";
-    ofn.nMaxFile = ARR_COUNT(buffer);
+    ofn.nMaxFile = MAX_PATH_COUNT;
     // NOCHANGE_DIR to prevent generating imgui.ini
     ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
     ofn.lpstrDefExt = L"mp4";
@@ -1058,10 +1092,12 @@ PickOutputFile(HINSTANCE hInstance, HWND hWnd, char* outPath) {
  */
 static void
 SaveOutputPathToConfig(AppState* appState, const char* path) {
-    wchar configFilePath[ARR_COUNT(appState->appData) + 32];
-    UTF8To16(appState->appData, configFilePath);
-    _snwprintf_s(configFilePath, ARR_COUNT(configFilePath), L"%ls\\easycompressor.cfg",
-                 configFilePath);
+    //wchar configFilePath[ARR_COUNT(appState->appData) + 32];
+    wchar* configFilePath = PushArray(&appState->scratchArena, wchar, MAX_PATH_COUNT);
+    //UTF8To16(appState->appData, configFilePath);
+    //_snwprintf_s(configFilePath, ARR_COUNT(configFilePath), L"%ls\\easycompressor.cfg",
+    //             configFilePath);
+    UTF8To16(appState->configFilePath, configFilePath);
     HANDLE file = CreateFileW(configFilePath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
@@ -1069,10 +1105,12 @@ SaveOutputPathToConfig(AppState* appState, const char* path) {
         return;
     }
 
-    char buff[MAX_PATH_COUNT + 512];
+    //char buff[MAX_PATH_COUNT + 512];
+    //char* buff = PushArray(&appState->scratchArena, char, MAX_PATH_COUNT + 512);
+    char* buff = PushArray(&appState->scratchArena, char, CONFIG_FILE_MAX_SIZE);
 
     DWORD read = 0;
-    ReadFile(file, buff, ARR_COUNT(buff), &read, nullptr);
+    ReadFile(file, buff, CONFIG_FILE_MAX_SIZE, &read, nullptr);
     CloseHandle(file);
     buff[read] = '\0';
 
@@ -1119,10 +1157,11 @@ PickoutputFolder(HWND hWnd, AppState* appState) {
 
     LPITEMIDLIST result = SHBrowseForFolderW(&bi);
     if (result) {
-        wchar buffer[MAX_PATH_COUNT] = {};
-        if (SHGetPathFromIDListW(result, buffer)) {
+        //wchar buff[MAX_PATH_COUNT] = {};
+        wchar* buff = PushArrayZero(&appState->scratchArena, wchar, MAX_PATH_COUNT);
+        if (SHGetPathFromIDListW(result, buff)) {
             //CopyMemory(appState->outputFolder, buffer, MAX_PATH_COUNT);
-            UTF16To8(buffer, appState->outputFolder);
+            UTF16To8(buff, appState->outputFolder);
             // This overwrites the selected value always
             // I think it's the most expected approach as if the user selects a new output path it
             // should be automatically be activated
@@ -1160,14 +1199,17 @@ HandleOpenFileNameBuffer(AppState* appState, const wchar* buffer, UINT fileOffse
     } else {
         // Multiple files
         while (*file) {
-            wchar fullW[MAX_PATH_COUNT];
+            Arena* scratch = &appState->scratchArena;
+            u64 startPos = ArenaGetPos(scratch);
+            //wchar fullW[MAX_PATH_COUNT];
+            wchar* fullW = PushArray(scratch, wchar, MAX_PATH_COUNT);
 #if !COMPRESSOR_TESTS
-            i32 written = _snwprintf_s(fullW, ARR_COUNT(fullW), L"%ls\\%ls", dir, file);
+            i32 written = _snwprintf_s(fullW, MAX_PATH_COUNT, _TRUNCATE, L"%ls\\%ls", dir, file);
 #else
             // To prevent crash when truncation would happen due to test data
-            i32 written = _snwprintf_s(fullW, ARR_COUNT(fullW), _TRUNCATE, L"%ls\\%ls", dir, file);
+            i32 written = _snwprintf_s(fullW, MAX_PATH_COUNT, _TRUNCATE, L"%ls\\%ls", dir, file);
 #endif
-            if (written < 0 || written >= ARR_COUNT(fullW)) {
+            if (written < 0 || written >= MAX_PATH_COUNT) {
                 ++rejected;
                 file += StrLengthW(file) + 1;
                 continue;
@@ -1180,6 +1222,8 @@ HandleOpenFileNameBuffer(AppState* appState, const wchar* buffer, UINT fileOffse
             }
 
             file += StrLengthW(file) + 1;
+
+            ArenaSetPos(scratch, startPos);
         }
     }
 
@@ -1189,7 +1233,9 @@ HandleOpenFileNameBuffer(AppState* appState, const wchar* buffer, UINT fileOffse
 static void
 PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     // TODO: Take care of stack size if MAX_PATH_COUNT is changed
-    wchar buff[MAX_PATH_COUNT * ARR_COUNT(appState->jobs)] = {};
+    //wchar buff[MAX_PATH_COUNT * ARR_COUNT(appState->jobs)] = {};
+    u64 size = MAX_PATH_COUNT * ARR_COUNT(appState->jobs);
+    wchar* buff = PushArrayZero(&appState->scratchArena, wchar, size);
 
     OPENFILENAME ofn = {};
     ofn.lStructSize = sizeof(ofn);
@@ -1204,7 +1250,8 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
                       "*.*\0";
     ofn.lpstrFile = buff;
     ofn.lpstrTitle = L"Select input files";
-    ofn.nMaxFile = ARR_COUNT(buff);
+    //ofn.nMaxFile = ARR_COUNT(buff);
+    ofn.nMaxFile = static_cast<DWORD>(size);
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT;
     ofn.lpstrDefExt = L"mp4";
 
@@ -1218,6 +1265,8 @@ PickInputFiles(HINSTANCE hInstance, HWND hWnd, AppState* appState) {
     i32 rejected = HandleOpenFileNameBuffer(appState, buff, ofn.nFileOffset, &lastErrorResult);
 
     HandleAddJobResults(appState, rejected, lastErrorResult);
+
+    ArenaPop(&appState->scratchArena, size);
 }
 
 static const char*
@@ -1512,8 +1561,7 @@ ParseConfigBuffer(AppState* appState, const char* buff) {
 
                     if (valid) {
                         DEBUG_PRINTF("Using output path: %s\n", outputPath);
-                        _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder),
-                                    outputPath);
+                        _snprintf_s(appState->outputFolder, MAX_PATH_COUNT, _TRUNCATE, outputPath);
                     } else {
                         DEBUG_PRINTF("Invalid output path: %s\n", outputPath);
                     }
@@ -1529,25 +1577,30 @@ ParseConfigBuffer(AppState* appState, const char* buff) {
 
 static bool32
 LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
-    char buff[CONFIG_FILE_MAX_SIZE];
-    bool32 ok = ReadConfigFile(path, buff, ARR_COUNT(buff));
+    //char buff[CONFIG_FILE_MAX_SIZE];
+    u64 size = CONFIG_FILE_MAX_SIZE;
+    char* buff = PushArrayZero(&appState->scratchArena, char, size);
+    //bool32 ok = ReadConfigFile(path, buff, ARR_COUNT(buff));
+    bool32 ok = ReadConfigFile(path, buff, static_cast<i32>(size));
     if (!ok) {
         return false;
     }
 
     ParseConfigBuffer(appState, buff);
 
+    ArenaPop(&appState->scratchArena, size);
+
     /// Fallbacks
 
     // Having no output path is NOT considered a failure
     // We just use the default User/Documents/EasyCompressor
     if (appState->outputFolder[0] == '\0') {
+        // TODO: scratch
         wchar outputFolder[MAX_PATH_COUNT];
         if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_MYDOCUMENTS, nullptr, 0, outputFolder))) {
             DEBUG_PRINT("Couldn't get user documents folder, using exe dir as working dir...\n");
             // Use exe dir as working dir...
-            _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
-                        appState->exeDir);
+            _snprintf_s(appState->outputFolder, MAX_PATH_COUNT, _TRUNCATE, "%s", appState->exeDir);
         } else {
             DEBUG_PRINTF("Found documents %ls\n", outputFolder);
             _snwprintf_s(outputFolder, ARR_COUNT(outputFolder), L"%ls\\EasyCompressor",
@@ -1562,7 +1615,7 @@ LoadConfigFile(HWND hWnd, AppState* appState, const wchar* path) {
                     INVALID_CODE_PATH;
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
-                    _snprintf_s(appState->outputFolder, ARR_COUNT(appState->outputFolder), "%s",
+                    _snprintf_s(appState->outputFolder, MAX_PATH_COUNT, _TRUNCATE, "%s",
                                 appState->exeDir);
                 }
             }
@@ -1619,7 +1672,10 @@ ClearJobs(AppState* appState) {
 
 static void
 OverwriteAndLoadNewConfig(HWND hWnd, AppState* appState) {
-    wchar configFilePathW[MAX_PATH_COUNT];
+    //wchar configFilePathW[MAX_PATH_COUNT];
+    u64 size = MAX_PATH_COUNT;
+    wchar* configFilePathW = PushArrayZero(&appState->scratchArena, wchar, size);
+
     UTF8To16(appState->configFilePath, configFilePathW);
     if (DeleteFileW(configFilePathW)) {
         if (CreateDefaultConfigFile(configFilePathW)) {
@@ -1635,6 +1691,67 @@ OverwriteAndLoadNewConfig(HWND hWnd, AppState* appState) {
     } else {
         SetErrorMsg(appState, "Couldn't delete old config");
     }
+
+    ArenaPop(&appState->scratchArena, size);
+}
+
+static bool32
+InitAppState(AppState* appState) {
+    // 64 bit
+#if COMPRESSOR_DEV
+    LPVOID baseAddress = reinterpret_cast<LPVOID>(TB(2));
+#else
+    LPVOID baseAddress = nullptr;
+#endif
+
+    u64 permanentSize = (MAX_PATH_COUNT * 7) + (MAX_PATH_COUNT * 2 * MAX_JOBS);
+    u64 scratchSize = MB(4);
+    u64 totalSize = permanentSize + scratchSize;
+    void* memory = VirtualAlloc(baseAddress, totalSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!memory) {
+        DEBUG_PRINT("VirtualAlloc failed!\n");
+        return false;
+    }
+
+    f32 totalSizeKB = static_cast<f32>(totalSize) / 1024.0f;
+    DEBUG_PRINTF("Allocated %llu bytes, KB: %.2f\n", totalSize, totalSizeKB);
+
+    appState->permanentMemory = memory;
+    appState->permanentMemorySize = permanentSize;
+    appState->scratchMemory = static_cast<u8*>(memory) + permanentSize;
+    appState->scratchMemorySize = scratchSize;
+
+    // Assign permanent storage locations
+    {
+        Arena* permanent = &appState->permanentArena;
+        InitArena(permanent, appState->permanentMemory, appState->permanentMemorySize);
+        DEBUG_PRINTF("Permanent arena base: %llu, size: %llu\n", appState->permanentMemory,
+                     appState->permanentMemorySize);
+
+        u64 size = MAX_PATH_COUNT;
+
+        appState->outputFolder = PushArray(permanent, char, size);
+        appState->exeDir = PushArray(permanent, char, size);
+        appState->tempDir = PushArray(permanent, char, size);
+        appState->appData = PushArray(permanent, char, size);
+        appState->imguiIniPath = PushArray(permanent, char, size);
+        appState->configFilePath = PushArray(permanent, char, size);
+        appState->ffmpegPath = PushArray(permanent, char, size);
+
+        for (i32 i = 0; i < ARR_COUNT(appState->jobs); ++i) {
+            appState->jobs[i].input = PushArray(permanent, char, size);
+            appState->jobs[i].output = PushArray(permanent, char, size);
+        }
+
+        ASSERT(permanent->used == permanentSize);
+    }
+
+    Arena* scratch = &appState->scratchArena;
+    InitArena(scratch, appState->scratchMemory, appState->scratchMemorySize);
+    DEBUG_PRINTF("Scratch arena base: %llu, size: %llu\n", appState->scratchMemory,
+                 appState->scratchMemorySize);
+
+    return true;
 }
 
 // Tests don't need this stuff
@@ -1679,7 +1796,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             }
 
             if (ImGui::MenuItem("Open config folder...")) {
-                OpenInExplorer(hWnd, appState->appData);
+                //OpenInExplorer(hWnd, &appState->scratchArena, appState->appData);
             }
 
             ImGui::EndMenu();
@@ -1699,6 +1816,21 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
 #    if COMPRESSOR_DEV
     ImGui::TextDisabled("DEV: compressing: %d, cancelled: %d", compressing, cancelled);
+    Arena* permanent = &appState->permanentArena;
+    Arena* scratch = &appState->scratchArena;
+
+    f32 toMB = 1 / (1024.0f * 1024.0f);
+    f32 scratchUsedMB = scratch->used * toMB;
+    f32 scratchTotalUsedMB = scratch->totalUsed * toMB;
+    f32 permUsedMB = permanent->used * toMB;
+    f32 permTotalUsedMB = permanent->totalUsed * toMB;
+
+    ImGui::TextDisabled("Permanent size: %llu, used: %llu (%.2f MB), total used: %llu (%.2f MB)",
+                        permanent->size, permanent->used, permUsedMB, permanent->totalUsed,
+                        permTotalUsedMB);
+    ImGui::TextDisabled("Scratch size: %llu, used: %llu (%.2f MB), total used: %llu (%.2f MB)",
+                        scratch->size, scratch->used, scratchUsedMB, scratch->totalUsed,
+                        scratchTotalUsedMB);
 #    endif
 
     const f32 sliderWidth = 190 * scale;
@@ -1794,10 +1926,10 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             PickoutputFolder(hWnd, appState);
             ImGui::GetIO().ClearInputMouse();
         } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-            OpenInExplorer(hWnd, appState->outputFolder);
+            OpenInExplorer(hWnd, &appState->scratchArena, appState->outputFolder);
         } else if (ImGui::BeginPopupContextItem("default_folder_menu")) {
             if (ImGui::MenuItem("Open folder in explorer...")) {
-                OpenInExplorer(hWnd, appState->outputFolder);
+                OpenInExplorer(hWnd, &appState->scratchArena, appState->outputFolder);
             }
 
             ImGui::EndPopup();
@@ -1960,14 +2092,14 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
             }
 
             if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                PickOutputFile(hInstance, hWnd, job->output);
+                PickOutputFile(hInstance, hWnd, &appState->scratchArena, job->output);
                 // This is done to reset broken hover state after the dialog closes
                 ImGui::GetIO().ClearInputMouse();
             } else if (ImGui::IsItemClicked(ImGuiMouseButton_Middle)) {
-                SelectInExplorer(hWnd, job->input);
+                SelectInExplorer(hWnd, &appState->scratchArena, job->input);
             } else if (ImGui::BeginPopupContextItem("job_context_menu")) {
                 if (ImGui::MenuItem("Open input in explorer...")) {
-                    SelectInExplorer(hWnd, job->input);
+                    SelectInExplorer(hWnd, &appState->scratchArena, job->input);
                 }
 
                 // TODO: more?
@@ -2076,7 +2208,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
                     ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
                 if (ImGui::SmallButton(label)) {
-                    SelectInExplorer(hWnd, job->output);
+                    SelectInExplorer(hWnd, &appState->scratchArena, job->output);
                 }
 
                 ImGui::PopStyleColor(2);
@@ -2261,7 +2393,7 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
         ImGui::SameLine(0, gap);
         if (ImGui::Button(btn3)) {
-            OpenInExplorer(hWnd, appState->appData);
+            OpenInExplorer(hWnd, &appState->scratchArena, appState->appData);
         }
 
         ImGui::EndPopup();
@@ -2390,19 +2522,22 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         AddJobResult lastErrorResult = AddJobResult::SUCCESS;
 
         for (UINT i = 0; i < fileCount && i < MAX_JOBS; ++i) {
-            wchar path[MAX_PATH_COUNT];
+            //wchar path[MAX_PATH_COUNT];
+            ASSERT(gAppState);
+            wchar* path = PushArray(&gAppState->scratchArena, wchar, MAX_PATH_COUNT);
+
             // Query the required character amount first, not including null terminator
             // If we don't query we have no way of deducing if the path was truncated or it's
             // exactly MAX_PATH_COUNT long
             UINT required = DragQueryFileW(drop, i, nullptr, 0);
             // Get the path and get the copied amount, not including null terminator
-            UINT copied = DragQueryFileW(drop, i, path, ARR_COUNT(path));
+            UINT copied = DragQueryFileW(drop, i, path, MAX_PATH_COUNT);
 
             DEBUG_PRINTF("Required: %u, copied %u (both not including null terminator)\n", required,
                          copied);
 
             // required > copied would work as well
-            if (required >= ARR_COUNT(path)) {
+            if (required >= MAX_PATH_COUNT) {
                 DEBUG_PRINTF("Path was truncated, didn't add job! Max length: %d\nPath would have "
                              "been %s\n",
                              MAX_PATH_COUNT, path);
@@ -2410,7 +2545,6 @@ WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 continue;
             }
 
-            ASSERT(gAppState);
             auto result = AddJob(gAppState, path);
             if (result != AddJobResult::SUCCESS) {
                 lastErrorResult = result;
@@ -2528,8 +2662,17 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     io.ConfigDpiScaleFonts = true; // Automatically scales fonts for docking branch
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+    /// Memory
+
     AppState appState = {};
+    if (!InitAppState(&appState)) {
+        DEBUG_PRINT("InitAppState failed!");
+        return 0;
+    }
+
     gAppState = &appState;
+
+    Arena* scratch = &appState.scratchArena;
 
     GetExeDirectory(&appState);
     DEBUG_PRINTF("Exe dir: %s\n", appState.exeDir);
@@ -2538,9 +2681,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 
     {
 #    if 1
-        char buff[MAX_PATH_COUNT + 64];
+        //char buff[MAX_PATH_COUNT + 64];
+
+        u64 size = MAX_PATH_COUNT + 64;
+        char* buff = PushArray(scratch, char, size);
         // This should show basically all Unicode characters
-        _snprintf_s(buff, ARR_COUNT(buff), "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
+        _snprintf_s(buff, size, _TRUNCATE, "%s\\vendor\\NotoSans-Regular.ttf", appState.exeDir);
         ImFontConfig fontConfig = {};
         // TODO: Flags is not yet exposed to be externally modified as of v1.92.7
         // See ImFontConfig declaration
@@ -2552,6 +2698,8 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
         if (!font) {
             DEBUG_PRINTF("Couldn't load font file: %s\n", buff);
         }
+
+        ArenaPop(scratch, size);
 #    else
         io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f, nullptr,
                                      io.Fonts->GetGlyphRangesDefault());
@@ -2567,42 +2715,47 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     /// Temp dir
 
     {
-        wchar tempDir[MAX_PATH_COUNT];
-        DWORD result = GetTempPathW(MAX_PATH_COUNT, tempDir);
+        //wchar tempDir[MAX_PATH_COUNT];
+        u64 size = MAX_PATH_COUNT;
+        wchar* tempDir = PushArray(scratch, wchar, size);
+        DWORD result = GetTempPathW(static_cast<DWORD>(size), tempDir);
         if (!result) {
             DEBUG_PRINT("Couldn't get temp folder, using exe dir as temp dir...\n");
             // Use exe dir as working dir...
-            _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+            _snprintf_s(appState.tempDir, size, _TRUNCATE, "%s", appState.exeDir);
         }
         // No space!
-        else if (result >= ARR_COUNT(appState.tempDir)) {
+        else if (result >= size) {
             DEBUG_PRINT("No space for temp dir, using exe dir...\n");
-            _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+            _snprintf_s(appState.tempDir, size, _TRUNCATE, "%s", appState.exeDir);
         } else {
             // Of course this API is different from SHGetFolderPathA, which doesn't have a backslash
-            ASSERT(result > 0 && result < ARR_COUNT(appState.tempDir));
-            if (result > 0 && result < ARR_COUNT(appState.tempDir)) {
+            ASSERT(result > 0 && result < size);
+            if (result > 0 && result < size) {
                 UTF16To8(tempDir, appState.tempDir);
                 appState.tempDir[result - 1] = '\0';
             } else {
-                _snprintf_s(appState.tempDir, ARR_COUNT(appState.tempDir), "%s", appState.exeDir);
+                _snprintf_s(appState.tempDir, size, _TRUNCATE, "%s", appState.exeDir);
             }
         }
+
+        ArenaPop(scratch, size);
     }
 
     /// Config file
     // TODO: exact same code as above
 
     {
-        wchar appData[MAX_PATH_COUNT];
+        u64 size = MAX_PATH_COUNT;
+        wchar* appData = PushArray(scratch, wchar, size);
         if (!SUCCEEDED(SHGetFolderPathW(hWnd, CSIDL_LOCAL_APPDATA, nullptr, 0, appData))) {
             DEBUG_PRINT("Couldn't get user appdata folder, using exe dir as working dir...\n");
-            _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s", appState.exeDir);
+            _snprintf_s(appState.appData, size, _TRUNCATE, "%s", appState.exeDir);
         } else {
             // Also very cumbersome to print wide strings, have to use %ls
             // probably doesn't even work correctly for special characters...
             DEBUG_PRINTF("Found appdata %ls\n", appData);
-            _snwprintf_s(appData, ARR_COUNT(appData), L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
+            _snwprintf_s(appData, size, _TRUNCATE, L"%ls\\%ls", appData, COMPRESSOR_NAMEW);
             BOOL created = CreateDirectoryW(appData, nullptr);
             // This is extremely annoying to do having to convert all the time
             UTF16To8(appData, appState.appData);
@@ -2611,49 +2764,60 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
                 if (err != ERROR_ALREADY_EXISTS) {
                     DEBUG_PRINTF("SHGetFolderPathA returned %s but couldn't create the directory "
                                  "there. Using exe dir...\n");
-                    _snprintf_s(appState.appData, ARR_COUNT(appState.appData), "%s",
-                                appState.exeDir);
+                    _snprintf_s(appState.appData, size, _TRUNCATE, "%s", appState.exeDir);
                     INVALID_CODE_PATH;
                 }
             }
         }
+
+        ArenaPop(scratch, size);
     }
 
-    _snprintf_s(appState.configFilePath, ARR_COUNT(appState.configFilePath),
-                "%s\\easycompressor.cfg", appState.appData);
+    _snprintf_s(appState.configFilePath, MAX_PATH_COUNT, _TRUNCATE, "%s\\easycompressor.cfg",
+                appState.appData);
 
-    wchar configPathW[MAX_PATH_COUNT];
-    UTF8To16(appState.configFilePath, configPathW);
-    bool32 ok = LoadConfigFile(hWnd, &appState, configPathW);
-    if (!ok) {
-        bool32 configExists = PathFileExistsW(configPathW);
-        if (configExists) {
-            SetPopupErrorMsg(&appState,
-                             "Config is malformed, consider fixing or deleting it\n"
-                             "The app will generate a new one upon startup after deletion");
-        } else {
-            bool32 created = CreateDefaultConfigFile(configPathW);
-            if (created) {
-                DEBUG_PRINT("Loading just created config file...\n");
-                LoadConfigFile(hWnd, &appState, configPathW);
+    {
+        u64 size = MAX_PATH_COUNT;
+        wchar* configPathW = PushArray(scratch, wchar, size);
+        UTF8To16(appState.configFilePath, configPathW);
+        bool32 ok = LoadConfigFile(hWnd, &appState, configPathW);
+        if (!ok) {
+            bool32 configExists = PathFileExistsW(configPathW);
+            if (configExists) {
+                SetPopupErrorMsg(&appState,
+                                 "Config is malformed, consider fixing or deleting it\n"
+                                 "The app will generate a new one upon startup after deletion");
             } else {
-                DEBUG_PRINT("Fallback to using default target sizes...\n");
-                f32 defaultTargetSizes[ARR_COUNT(appState.targetSizes)] = { 5.0f, 10.0f, 25.0, 50.0,
-                                                                            100.0f };
-                CopyMemory(appState.targetSizes, defaultTargetSizes, sizeof(appState.targetSizes));
-                appState.defaultTargetSize = defaultTargetSizes[1];
+                bool32 created = CreateDefaultConfigFile(configPathW);
+                if (created) {
+                    DEBUG_PRINT("Loading just created config file...\n");
+                    LoadConfigFile(hWnd, &appState, configPathW);
+                } else {
+                    DEBUG_PRINT("Fallback to using default target sizes...\n");
+                    f32 defaultTargetSizes[ARR_COUNT(appState.targetSizes)] = { 5.0f, 10.0f, 25.0,
+                                                                                50.0, 100.0f };
+                    CopyMemory(appState.targetSizes, defaultTargetSizes,
+                               sizeof(appState.targetSizes));
+                    appState.defaultTargetSize = defaultTargetSizes[1];
+                }
             }
         }
+
+        ArenaPop(scratch, size);
     }
 
-    // imgui.ini also to same path
-    char configPath[MAX_PATH_COUNT];
-    _snprintf_s(configPath, ARR_COUNT(configPath), "%s\\imgui.ini", appState.appData);
-    io.IniFilename = configPath;
+    {
+        // imgui.ini also to same path
+        _snprintf_s(appState.imguiIniPath, MAX_PATH_COUNT, _TRUNCATE, "%s\\imgui.ini",
+                    appState.appData);
+        io.IniFilename = appState.imguiIniPath;
 
-    // TODO: support package managers so read from PATH
-    _snprintf_s(appState.ffmpegPath, ARR_COUNT(appState.ffmpegPath), "%s\\vendor\\ffmpeg",
-                appState.exeDir);
+        // TODO: support package managers so read from PATH
+        u64 size = MAX_PATH_COUNT;
+        _snprintf_s(appState.ffmpegPath, size, _TRUNCATE, "%s\\vendor\\ffmpeg", appState.exeDir);
+
+        ArenaPop(scratch, size);
+    }
 
     // Start worker thread
     HANDLE workerThread = CreateThread(nullptr, 0, WorkerThread, &appState, 0, nullptr);
@@ -2668,16 +2832,17 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
 #    if COMPRESSOR_DEV
     DEBUG_PRINT("Adding test files at startup...\n");
 
-    wchar testPath1[MAX_PATH_COUNT];
-    wchar testPath2[MAX_PATH_COUNT];
-    wchar testPath3[MAX_PATH_COUNT];
+    u64 size = MAX_PATH_COUNT;
+    wchar* testPath1 = PushArray(scratch, wchar, size);
+    wchar* testPath2 = PushArray(scratch, wchar, size);
+    wchar* testPath3 = PushArray(scratch, wchar, size);
 
-    wchar exeDir[ARR_COUNT(appState.exeDir)];
+    wchar* exeDir = PushArray(scratch, wchar, size);
     UTF8To16(appState.exeDir, exeDir);
 
-    _snwprintf_s(testPath1, ARR_COUNT(testPath1), L"%ls\\..\\test_file1_large.mp4", exeDir);
-    _snwprintf_s(testPath2, ARR_COUNT(testPath2), L"%ls\\..\\test_file2.mp4", exeDir);
-    _snwprintf_s(testPath3, ARR_COUNT(testPath3), L"%ls\\..\\testi_file_small.mp4", exeDir);
+    _snwprintf_s(testPath1, size, _TRUNCATE, L"%ls\\..\\test_file1_large.mp4", exeDir);
+    _snwprintf_s(testPath2, size, _TRUNCATE, L"%ls\\..\\test_file2.mp4", exeDir);
+    _snwprintf_s(testPath3, size, _TRUNCATE, L"%ls\\..\\testi_file_small.mp4", exeDir);
 
     AddJob(&appState, testPath1);
     AddJob(&appState, testPath2);
@@ -2699,6 +2864,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE /*unused*/, LPSTR /*unused*/, int /*unuse
     //ImVec4 clearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     while (running) {
+        // TODO: we would not have to pop at every moment if we just do this at the end
+        ArenaClear(scratch);
+
         auto frameStart = GetWallClock();
         // For the first frame delta is ~0.0f, which is fine
         f32 deltaMs = GetMsElapsed(currentCounter, frameStart);

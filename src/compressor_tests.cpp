@@ -20,14 +20,66 @@ CANDIDATES TO TEST:
     - GetExeDirectory
 */
 
-struct AddJobAppStateFixture {
-    AppState appState = {};
+// Now that we use a fixed permanent storage, we have to clear manually
+static void
+ResetAppState(AppState* appState) {
+    appState->jobCount = 0;
+    for (i32 i = 0; i < ARR_COUNT(appState->jobs); ++i) {
+        appState->jobs[i].input[0] = '\0';
+        appState->jobs[i].output[0] = '\0';
+    }
 
-    AddJobAppStateFixture() {
-        // Other stuff?
-        snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "C:\\output");
+    appState->defaultCodec = Codec::NONE;
+    appState->defaultTargetSize = 0.0f;
+    ZeroMemory(appState->targetSizes, sizeof(appState->targetSizes));
+    appState->outputFolder[0] = '\0';
+
+    // The functions use the scratch arena so we do this manually here
+    ArenaClear(&appState->scratchArena);
+}
+
+struct AppStateFixture {
+    AppState* appState = nullptr;
+
+    AppStateFixture() {
+        static AppState staticAppState = {};
+        static bool32 initialized = false;
+        if (!initialized) {
+            InitAppState(&staticAppState);
+            initialized = true;
+        }
+
+        appState = &staticAppState;
+    }
+
+    ~AppStateFixture() { ResetAppState(appState); }
+
+    bool32
+    IsZeroed() {
+        bool32 targetSizesZeroed = true;
+        for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
+            if (appState->targetSizes[i] != 0.0f) {
+                targetSizesZeroed = false;
+                break;
+            }
+        }
+
+        bool32 defaultTargetSizeZeroed = appState->defaultTargetSize == 0.0f;
+        bool32 codecZeroed = appState->defaultCodec == Codec::NONE;
+        bool32 outputFolderZeroed = appState->outputFolder[0] == '\0';
+
+        return targetSizesZeroed && defaultTargetSizeZeroed && codecZeroed && outputFolderZeroed;
     }
 };
+
+struct AddJobAppStateFixture : AppStateFixture {
+    AddJobAppStateFixture() {
+        // Other stuff?
+        _snprintf_s(appState->outputFolder, MAX_PATH_COUNT, _TRUNCATE, "C:\\output");
+    }
+};
+
+TEST_SUITE_BEGIN("String stuff");
 
 TEST_CASE("StrEqual works correctly") {
     struct TC {
@@ -72,6 +124,8 @@ TEST_CASE("UTF16 round trip") {
     CHECK(StrEqual(str, str2));
 }
 
+TEST_SUITE_END();
+
 TEST_CASE_FIXTURE(AddJobAppStateFixture, "ConstructPathsForJob works correctly") {
     struct TC {
         const wchar* input;
@@ -89,7 +143,11 @@ TEST_CASE_FIXTURE(AddJobAppStateFixture, "ConstructPathsForJob works correctly")
                        TC{ L"K:\\input\\요 세계.hgfh.mp4", "C:\\output\\요 세계.hgfh.mp4" });
 
     UIJob j = {};
-    ConstructPathsForJob(&appState, &j, tc.input);
+    j.input = appState->jobs[0].input;
+    j.output = appState->jobs[0].output;
+    j.input[0] = '\0';
+    j.output[0] = '\0';
+    ConstructPathsForJob(appState, &j, tc.input);
 
     char inputUtf8[MAX_PATH_COUNT];
     UTF16To8(tc.input, inputUtf8);
@@ -113,20 +171,20 @@ TEST_CASE_FIXTURE(AddJobAppStateFixture, "IsPathFromOutputFolder works correctly
     char inputUtf8[MAX_PATH_COUNT];
     UTF16To8(tc.input, inputUtf8);
     INFO("input:           ", inputUtf8);
-    INFO("appstate output: ", appState.outputFolder);
+    INFO("appstate output: ", appState->outputFolder);
     INFO("expected:        ", tc.exp);
-    CHECK_EQ(IsPathFromOutputFolder(&appState, tc.input), tc.exp);
+    CHECK_EQ(IsPathFromOutputFolder(appState, tc.input), tc.exp);
 }
 
 // Temp files for AddJob
-struct TempFileFixture {
+struct TempFilesFixture {
     // TODO: test paths greater than MAX_PATH: 260 and current MAX_PATH_COUNT
     wchar dir[MAX_PATH_COUNT];
     wchar path[MAX_PATH_COUNT];
     wchar path2[MAX_PATH_COUNT];
     wchar path3[MAX_PATH_COUNT];
 
-    TempFileFixture() {
+    TempFilesFixture() {
         i32 val = GetTempPathW(ARR_COUNT(dir), dir);
         REQUIRE(val != 0);
         dir[val - 1] = '\0'; // Remove trailing slash...
@@ -139,6 +197,12 @@ struct TempFileFixture {
         CreateTestFile(path);
         CreateTestFile(path2);
         CreateTestFile(path3);
+    }
+
+    ~TempFilesFixture() {
+        DeleteFileW(path);
+        DeleteFileW(path2);
+        DeleteFileW(path3);
     }
 
     void
@@ -155,56 +219,52 @@ struct TempFileFixture {
 
         CloseHandle(file);
     }
-
-    ~TempFileFixture() {
-        DeleteFileW(path);
-        DeleteFileW(path2);
-        DeleteFileW(path3);
-    }
 };
 
-struct AddJobFixture : AddJobAppStateFixture, TempFileFixture {};
+TEST_SUITE_BEGIN("AddJob");
+
+struct AddJobFixture : AddJobAppStateFixture, TempFilesFixture {};
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob reads file size correctly") {
     CAPTURE(appState);
-    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == 1);
-    CHECK(appState.jobs[0].inputFileSize == doctest::Approx(4096 / (1024.0f * 1024.0f)));
+    CHECK(AddJob(appState, path) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == 1);
+    CHECK(appState->jobs[0].inputFileSize == doctest::Approx(4096 / (1024.0f * 1024.0f)));
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob fails at MAX_JOBS") {
-    appState.jobCount = MAX_JOBS;
-    CHECK(AddJob(&appState, path) == AddJobResult::JOBS_FULL);
-    CHECK(appState.jobCount == MAX_JOBS);
+    appState->jobCount = MAX_JOBS;
+    CHECK(AddJob(appState, path) == AddJobResult::JOBS_FULL);
+    CHECK(appState->jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob succeeds at MAX_JOBS - 1") {
-    appState.jobCount = MAX_JOBS - 1;
-    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == MAX_JOBS);
+    appState->jobCount = MAX_JOBS - 1;
+    CHECK(AddJob(appState, path) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == MAX_JOBS);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob increments job list correctly") {
-    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    CHECK(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    CHECK(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == 3);
+    CHECK(AddJob(appState, path) == AddJobResult::SUCCESS);
+    CHECK(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    CHECK(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == 3);
 
     for (i32 i = 0; i < 3; ++i) {
-        CHECK(appState.jobs[i].status == JobStatus::QUEUED);
+        CHECK(appState->jobs[i].status == JobStatus::QUEUED);
     }
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects duplicate input") {
-    CHECK(AddJob(&appState, path) == AddJobResult::SUCCESS);
+    CHECK(AddJob(appState, path) == AddJobResult::SUCCESS);
 
-    CHECK(AddJob(&appState, path) == AddJobResult::DUPLICATE_JOB);
-    CHECK(AddJob(&appState, path) == AddJobResult::DUPLICATE_JOB);
-    CHECK(appState.jobCount == 1);
+    CHECK(AddJob(appState, path) == AddJobResult::DUPLICATE_JOB);
+    CHECK(AddJob(appState, path) == AddJobResult::DUPLICATE_JOB);
+    CHECK(appState->jobCount == 1);
 
-    CHECK(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    CHECK(AddJob(&appState, path2) == AddJobResult::DUPLICATE_JOB);
-    CHECK(appState.jobCount == 2);
+    CHECK(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    CHECK(AddJob(appState, path2) == AddJobResult::DUPLICATE_JOB);
+    CHECK(appState->jobCount == 2);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
@@ -214,18 +274,20 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob rejects input from output folder") {
     UTF16To8(dir, dirUtf8);
     INFO(pathUtf8);
 
-    snprintf(appState.outputFolder, ARR_COUNT(appState.outputFolder), "%s", dirUtf8);
-    INFO(appState.outputFolder);
+    snprintf(appState->outputFolder, MAX_PATH_COUNT, "%s", dirUtf8);
+    INFO(appState->outputFolder);
 
-    CHECK(AddJob(&appState, path) == AddJobResult::JOB_FROM_OUTPUT);
-    CHECK(appState.jobCount == 0);
+    CHECK(AddJob(appState, path) == AddJobResult::JOB_FROM_OUTPUT);
+    CHECK(appState->jobCount == 0);
 }
 
+TEST_SUITE_END();
+
 TEST_CASE_FIXTURE(AddJobFixture, "MoveJob works correctly") {
-    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    REQUIRE(appState.jobCount == 3);
+    REQUIRE(AddJob(appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(appState->jobCount == 3);
 
     char pathUtf8[MAX_PATH_COUNT];
     char path2Utf8[MAX_PATH_COUNT];
@@ -235,41 +297,41 @@ TEST_CASE_FIXTURE(AddJobFixture, "MoveJob works correctly") {
     UTF16To8(path3, path3Utf8);
 
     // Normal operations
-    CHECK(MoveJob(&appState, 0, 2));
-    CHECK(MoveJob(&appState, 2, 0));
-    CHECK(MoveJob(&appState, 1, 2));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[2].input, path2Utf8));
+    CHECK(MoveJob(appState, 0, 2));
+    CHECK(MoveJob(appState, 2, 0));
+    CHECK(MoveJob(appState, 1, 2));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[2].input, path2Utf8));
 
-    CHECK(MoveJob(&appState, 2, 0));
-    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
+    CHECK(MoveJob(appState, 2, 0));
+    CHECK(StrEqual(appState->jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[2].input, path3Utf8));
 
     // Invalid
-    CHECK(!MoveJob(&appState, 3, 2));
-    CHECK(!MoveJob(&appState, -2, 2));
-    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
+    CHECK(!MoveJob(appState, 3, 2));
+    CHECK(!MoveJob(appState, -2, 2));
+    CHECK(StrEqual(appState->jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[2].input, path3Utf8));
 
     // Highest running index
-    CHECK(!MoveJob(&appState, 0, 2, 1));
-    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[2].input, path3Utf8));
-    CHECK(MoveJob(&appState, 2, 1, 0));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
-    CHECK(!MoveJob(&appState, 1, 2, 2));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+    CHECK(!MoveJob(appState, 0, 2, 1));
+    CHECK(StrEqual(appState->jobs[1].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[2].input, path3Utf8));
+    CHECK(MoveJob(appState, 2, 1, 0));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[2].input, pathUtf8));
+    CHECK(!MoveJob(appState, 1, 2, 2));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[2].input, pathUtf8));
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "RemoveJob works correctly") {
-    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    REQUIRE(appState.jobCount == 3);
+    REQUIRE(AddJob(appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(appState->jobCount == 3);
 
     char pathUtf8[MAX_PATH_COUNT];
     char path2Utf8[MAX_PATH_COUNT];
@@ -278,44 +340,44 @@ TEST_CASE_FIXTURE(AddJobFixture, "RemoveJob works correctly") {
     UTF16To8(path2, path2Utf8);
     UTF16To8(path3, path3Utf8);
 
-    CHECK(RemoveJob(&appState, 1));
-    CHECK(appState.jobCount == 2);
-    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(RemoveJob(appState, 1));
+    CHECK(appState->jobCount == 2);
+    CHECK(StrEqual(appState->jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
 
     // Remove from end
-    CHECK(RemoveJob(&appState, 1));
-    CHECK(appState.jobCount == 1);
-    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
+    CHECK(RemoveJob(appState, 1));
+    CHECK(appState->jobCount == 1);
+    CHECK(StrEqual(appState->jobs[0].input, pathUtf8));
 
     // Tests adding after removal
-    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path2) == AddJobResult::SUCCESS);
 
     // Invalid
-    CHECK(!RemoveJob(&appState, -1));
-    CHECK(appState.jobCount == 3);
-    CHECK(!RemoveJob(&appState, 4));
-    CHECK(appState.jobCount == 3);
-    CHECK(!RemoveJob(&appState, 3));
-    CHECK(appState.jobCount == 3);
-    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[2].input, path2Utf8));
+    CHECK(!RemoveJob(appState, -1));
+    CHECK(appState->jobCount == 3);
+    CHECK(!RemoveJob(appState, 4));
+    CHECK(appState->jobCount == 3);
+    CHECK(!RemoveJob(appState, 3));
+    CHECK(appState->jobCount == 3);
+    CHECK(StrEqual(appState->jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[2].input, path2Utf8));
 
-    CHECK(RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 2);
-    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, path2Utf8));
+    CHECK(RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 2);
+    CHECK(StrEqual(appState->jobs[0].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, path2Utf8));
 
-    CHECK(RemoveJob(&appState, 1));
-    CHECK(appState.jobCount == 1);
-    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
-    CHECK(RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 0);
+    CHECK(RemoveJob(appState, 1));
+    CHECK(appState->jobCount == 1);
+    CHECK(StrEqual(appState->jobs[0].input, path3Utf8));
+    CHECK(RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 0);
 
-    CHECK(!RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 0);
+    CHECK(!RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 0);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "AddJob, RemoveJob and MoveJob work correctly") {
@@ -326,64 +388,66 @@ TEST_CASE_FIXTURE(AddJobFixture, "AddJob, RemoveJob and MoveJob work correctly")
     UTF16To8(path2, path2Utf8);
     UTF16To8(path3, path3Utf8);
 
-    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    REQUIRE(appState.jobCount == 3);
+    REQUIRE(AddJob(appState, path) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    REQUIRE(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    REQUIRE(appState->jobCount == 3);
     // [path, path2, path3]
 
     // Move then remove the result
-    CHECK(MoveJob(&appState, 0, 2));
+    CHECK(MoveJob(appState, 0, 2));
     // [path2, path3, path]
-    CHECK(RemoveJob(&appState, 2));
-    CHECK(appState.jobCount == 2);
-    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
+    CHECK(RemoveJob(appState, 2));
+    CHECK(appState->jobCount == 2);
+    CHECK(StrEqual(appState->jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
 
     // Re-add the removed job, check it lands at the end
-    REQUIRE(AddJob(&appState, path) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == 3);
-    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+    REQUIRE(AddJob(appState, path) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == 3);
+    CHECK(StrEqual(appState->jobs[2].input, pathUtf8));
     // [path2, path3, path]
 
     // Remove from front
-    CHECK(RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 2);
-    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, pathUtf8));
+    CHECK(RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 2);
+    CHECK(StrEqual(appState->jobs[0].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, pathUtf8));
     // [path3, path]
 
     // Re-add path2, move it to front
-    REQUIRE(AddJob(&appState, path2) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == 3);
+    REQUIRE(AddJob(appState, path2) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == 3);
     // [path3, path, path2]
-    CHECK(MoveJob(&appState, 2, 0));
+    CHECK(MoveJob(appState, 2, 0));
     // [path2, path3, path]
-    CHECK(StrEqual(appState.jobs[0].input, path2Utf8));
-    CHECK(StrEqual(appState.jobs[1].input, path3Utf8));
-    CHECK(StrEqual(appState.jobs[2].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[0].input, path2Utf8));
+    CHECK(StrEqual(appState->jobs[1].input, path3Utf8));
+    CHECK(StrEqual(appState->jobs[2].input, pathUtf8));
 
     // Remove middle, move remaining
-    CHECK(RemoveJob(&appState, 1));
-    CHECK(appState.jobCount == 2);
+    CHECK(RemoveJob(appState, 1));
+    CHECK(appState->jobCount == 2);
     // [path2, path]
-    CHECK(MoveJob(&appState, 1, 0));
+    CHECK(MoveJob(appState, 1, 0));
     // [path, path2]
-    CHECK(StrEqual(appState.jobs[0].input, pathUtf8));
-    CHECK(StrEqual(appState.jobs[1].input, path2Utf8));
+    CHECK(StrEqual(appState->jobs[0].input, pathUtf8));
+    CHECK(StrEqual(appState->jobs[1].input, path2Utf8));
 
     // Remove down to empty
-    CHECK(RemoveJob(&appState, 0));
-    CHECK(RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 0);
-    CHECK(!RemoveJob(&appState, 0));
-    CHECK(appState.jobCount == 0);
+    CHECK(RemoveJob(appState, 0));
+    CHECK(RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 0);
+    CHECK(!RemoveJob(appState, 0));
+    CHECK(appState->jobCount == 0);
 
     // Re-add after empty
-    REQUIRE(AddJob(&appState, path3) == AddJobResult::SUCCESS);
-    CHECK(appState.jobCount == 1);
-    CHECK(StrEqual(appState.jobs[0].input, path3Utf8));
+    REQUIRE(AddJob(appState, path3) == AddJobResult::SUCCESS);
+    CHECK(appState->jobCount == 1);
+    CHECK(StrEqual(appState->jobs[0].input, path3Utf8));
 }
+
+TEST_SUITE_BEGIN("Adding files");
 
 TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles single file") {
     wchar buff[MAX_PATH_COUNT];
@@ -393,9 +457,9 @@ TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles single file")
     AddJobResult lastError;
     // fileOffset points to the filename after the last backslash
     UINT fileOffset = static_cast<UINT>((StrLengthW(this->dir) + 1)); // dir + '\' + fil)ename
-    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    i32 rejected = HandleOpenFileNameBuffer(appState, buff, fileOffset, &lastError);
     CHECK(rejected == 0);
-    CHECK(appState.jobCount == 1);
+    CHECK(appState->jobCount == 1);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles multiple files") {
@@ -415,9 +479,9 @@ TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer handles multiple file
 
     AddJobResult lastError;
     UINT fileOffset = dirLen + 1;
-    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    i32 rejected = HandleOpenFileNameBuffer(appState, buff, fileOffset, &lastError);
     CHECK(rejected == 0);
-    CHECK(appState.jobCount == 3);
+    CHECK(appState->jobCount == 3);
 }
 
 TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer rejects truncated path") {
@@ -439,10 +503,12 @@ TEST_CASE_FIXTURE(AddJobFixture, "HandleOpenFileNameBuffer rejects truncated pat
 
     AddJobResult lastError;
     UINT fileOffset = dirLen + 1;
-    i32 rejected = HandleOpenFileNameBuffer(&appState, buff, fileOffset, &lastError);
+    i32 rejected = HandleOpenFileNameBuffer(appState, buff, fileOffset, &lastError);
     CHECK(rejected == 1);
-    CHECK(appState.jobCount == 0);
+    CHECK(appState->jobCount == 0);
 }
+
+TEST_SUITE_END();
 
 /// -----------------------------------------------------------------------------
 /// Config file stuff
@@ -475,6 +541,8 @@ struct TempConfigFileFixture {
     ~TempConfigFileFixture() { DeleteFileW(path); }
 };
 
+TEST_SUITE_BEGIN("Parsing config");
+
 // This tests file I/O as well
 TEST_CASE_FIXTURE(TempConfigFileFixture, "ReadConfigFile works correctly") {
     struct TC {
@@ -489,27 +557,6 @@ TEST_CASE_FIXTURE(TempConfigFileFixture, "ReadConfigFile works correctly") {
     CHECK_EQ(ok, tc.exp);
 }
 
-struct AppStateFixture {
-    AppState appState = {};
-
-    bool32
-    IsZeroed() {
-        bool32 targetSizesZeroed = true;
-        for (i32 i = 0; i < ARR_COUNT(appState.targetSizes); ++i) {
-            if (appState.targetSizes[i] != 0.0f) {
-                targetSizesZeroed = false;
-                break;
-            }
-        }
-
-        bool32 defaultTargetSizeZeroed = appState.defaultTargetSize == 0.0f;
-        bool32 codecZeroed = appState.defaultCodec == Codec::NONE;
-        bool32 outputFolderZeroed = appState.outputFolder[0] == '\0';
-
-        return targetSizesZeroed && defaultTargetSizeZeroed && codecZeroed && outputFolderZeroed;
-    }
-};
-
 // Here we don't care about the file I/O anymore, we can just use the raw content as test data
 TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips comments") {
     struct TC {
@@ -520,7 +567,7 @@ TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips comments") {
                        TC{ "# THis isffect anything\n"
                            "#ASDasd"
                            "test characters### dфывьн - --" });
-    ParseConfigBuffer(&appState, tc.content);
+    ParseConfigBuffer(appState, tc.content);
     CHECK(this->IsZeroed());
 }
 
@@ -538,19 +585,15 @@ TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer skips garbage input") {
                            "### comment\n1234567890"
                            "#comment\n     !!!! #### ????"
                            "" });
-    ParseConfigBuffer(&appState, tc.content);
+    ParseConfigBuffer(appState, tc.content);
     CHECK(this->IsZeroed());
 }
 
-struct ParseConfigAppStateFixture {
-    AppState appState = {};
-};
-
 // TODO: this creates folders and deletes them
-TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly") {
+TEST_CASE_FIXTURE(AppStateFixture, "ParseConfigBuffer works correctly") {
     struct TC {
         const char* content;
-        f32 expSizes[ARR_COUNT(appState.targetSizes)];
+        f32 expSizes[ARR_COUNT(appState->targetSizes)];
         Codec expCodec;
         const char* expOutput;
         f32 expDefaultSize;
@@ -607,18 +650,18 @@ TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly
                            "" });
 
     // TODO: this creates the folder for output path
-    ParseConfigBuffer(&appState, tc.content);
+    ParseConfigBuffer(appState, tc.content);
     INFO(tc.content);
-    for (i32 i = 0; i < ARR_COUNT(appState.targetSizes); ++i) {
-        CHECK(appState.targetSizes[i] == doctest::Approx(tc.expSizes[i]));
+    for (i32 i = 0; i < ARR_COUNT(appState->targetSizes); ++i) {
+        CHECK(appState->targetSizes[i] == doctest::Approx(tc.expSizes[i]));
     }
 
-    CHECK(appState.defaultTargetSize == doctest::Approx(tc.expDefaultSize));
-    CHECK_EQ(appState.defaultCodec, tc.expCodec);
+    CHECK(appState->defaultTargetSize == doctest::Approx(tc.expDefaultSize));
+    CHECK_EQ(appState->defaultCodec, tc.expCodec);
 
-    INFO(appState.outputFolder);
+    INFO(appState->outputFolder);
     INFO(tc.expOutput);
-    CHECK(StrEqual(appState.outputFolder, tc.expOutput));
+    CHECK(StrEqual(appState->outputFolder, tc.expOutput));
 
     // Cleanup
     wchar outputW[MAX_PATH_COUNT];
@@ -628,10 +671,11 @@ TEST_CASE_FIXTURE(ParseConfigAppStateFixture, "ParseConfigBuffer works correctly
     }
 }
 
+TEST_SUITE_END();
+
 /// LoadConfigFile
 
-struct LoadConfigFileFixture {
-    AppState appState = {};
+struct LoadConfigFileFixture : AppStateFixture {
     wchar dir[MAX_PATH_COUNT];
     wchar path[MAX_PATH_COUNT];
 
@@ -659,34 +703,36 @@ struct LoadConfigFileFixture {
     void
     CleanupCreatedOutputFolder() {
         wchar outputW[MAX_PATH_COUNT];
-        UTF8To16(appState.outputFolder, outputW);
+        UTF8To16(appState->outputFolder, outputW);
         if (PathFileExistsW(outputW)) {
             RemoveDirectoryW(outputW);
         }
     }
 };
 
+TEST_SUITE_BEGIN("Loading config");
+
 // These just test that the fallbacks work correctly
 // ParseConfigBuffer does the heavy lifting
 TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile fails correctly") {
-    CHECK(!LoadConfigFile(nullptr, &appState, L"invalid/path/file.cfg"));
+    CHECK(!LoadConfigFile(nullptr, appState, L"invalid/path/file.cfg"));
 
     // No sizes is the only content failure
     this->WriteConfig("[Codecs]\nh264\n");
-    CHECK(!LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultCodec == Codec::H264);
-    INFO(appState.outputFolder);
+    CHECK(!LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultCodec == Codec::H264);
+    INFO(appState->outputFolder);
     // TODO: we assign to User/Documents/EasyCompressor
     // hard to test so we just check this
-    CHECK(appState.outputFolder[0] != '\0');
+    CHECK(appState->outputFolder[0] != '\0');
 }
 
 TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks correctly") {
     this->WriteConfig("[Sizes]\n2.0\n5.0\n");
-    REQUIRE(LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultCodec == Codec::H264);
-    CHECK(appState.defaultTargetSize == doctest::Approx(2.0f));
-    CHECK(appState.outputFolder[0] != '\0');
+    REQUIRE(LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultCodec == Codec::H264);
+    CHECK(appState->defaultTargetSize == doctest::Approx(2.0f));
+    CHECK(appState->outputFolder[0] != '\0');
     this->CleanupCreatedOutputFolder();
 
     //appState = {};
@@ -706,40 +752,48 @@ TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks corre
     cl!DllGetObjHandler()+0x180fbf
 
     Already had this happen before inside AddJob:
-    UIJob* j = &appState->jobs[appState->jobCount];
+    UIJob* j = appState->jobs[appState->jobCount];
     *j = {};
 
     I guess the compiler tries to do some magic but crashes in that attempt. Using ZeroMemory
     manually has fixed the issue every time
     */
 
-    ZeroMemory(&appState, sizeof(appState));
+    //appState = {};
+    //ZeroMemory(appState, sizeof(appState));
+    // Manual reset as now we use arenas with fixed permanent storage
+    ResetAppState(appState);
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n[Codecs]\nh265 !\n[OutputPath]\nC:\\EasyCompTemp");
-    REQUIRE(LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
-    CHECK(appState.defaultCodec == Codec::H265);
-    CHECK(StrEqual(appState.outputFolder, "C:\\EasyCompTemp"));
+    REQUIRE(LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultTargetSize == doctest::Approx(5.0f));
+    CHECK(appState->defaultCodec == Codec::H265);
+    CHECK(StrEqual(appState->outputFolder, "C:\\EasyCompTemp"));
     this->CleanupCreatedOutputFolder();
 
-    //appState = {};
-    ZeroMemory(&appState, sizeof(appState));
+    ResetAppState(appState);
     this->WriteConfig("[Sizes]\n7.5\n    6.42\n");
-    REQUIRE(LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultTargetSize == doctest::Approx(7.5f));
+    REQUIRE(LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultTargetSize == doctest::Approx(7.5f));
     this->CleanupCreatedOutputFolder();
 
-    //appState = {};
-    ZeroMemory(&appState, sizeof(appState));
+    ResetAppState(appState);
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n4.0\n");
-    REQUIRE(LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultTargetSize == doctest::Approx(5.0f));
+    REQUIRE(LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultTargetSize == doctest::Approx(5.0f));
     this->CleanupCreatedOutputFolder();
 
-    //appState = {};
-    ZeroMemory(&appState, sizeof(appState));
+    ResetAppState(appState);
     this->WriteConfig("[Sizes]\n2.\n[Codecs]");
-    REQUIRE(LoadConfigFile(nullptr, &appState, path));
-    CHECK(appState.defaultTargetSize == doctest::Approx(2.0f));
-    CHECK(appState.defaultCodec == Codec::H264);
+    REQUIRE(LoadConfigFile(nullptr, appState, path));
+    CHECK(appState->defaultTargetSize == doctest::Approx(2.0f));
+    CHECK(appState->defaultCodec == Codec::H264);
     this->CleanupCreatedOutputFolder();
 }
+
+TEST_SUITE_END();
+
+/// -----------------------------------------------------------------------------
+/// Arena
+/// -----------------------------------------------------------------------------
+
+// TODO:

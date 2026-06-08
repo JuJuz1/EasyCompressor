@@ -39,6 +39,11 @@ typedef wchar_t wchar;
 
 // clang-format on
 
+#define KB(x) (x * 1024ULL)
+#define MB(x) (KB(x) * 1024ULL)
+#define GB(x) (MB(x) * 1024ULL)
+#define TB(x) (GB(x) * 1024ULL)
+
 /**
  * Returns number of bytes, NOT the number of "real" characters
  */
