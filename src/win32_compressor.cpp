@@ -1697,8 +1697,10 @@ OverwriteAndLoadNewConfig(HWND hWnd, AppState* appState) {
 
 static bool32
 InitAppState(AppState* appState) {
-    // 64 bit
-#if COMPRESSOR_DEV
+#if COMPRESSOR_DEV && !COMPRESSOR_TESTS
+    // This caused some problems if tests were ran too quickly sequentially
+    // I think VirtualAlloc failed, Windows couldn't clean the address up quickly enough I guess
+    // 64 bit...
     LPVOID baseAddress = reinterpret_cast<LPVOID>(TB(2));
 #else
     LPVOID baseAddress = nullptr;
@@ -1820,17 +1822,20 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
     Arena* scratch = &appState->scratchArena;
 
     f32 toMB = 1 / (1024.0f * 1024.0f);
-    f32 scratchUsedMB = scratch->used * toMB;
-    f32 scratchTotalUsedMB = scratch->totalUsed * toMB;
     f32 permUsedMB = permanent->used * toMB;
     f32 permTotalUsedMB = permanent->totalUsed * toMB;
+
+    f32 scratchUsedMB = scratch->used * toMB;
+    f32 scratchTotalUsedMB = scratch->totalUsed * toMB;
+    f32 scratchMaxUsedMB = scratch->maxUsed * toMB;
 
     ImGui::TextDisabled("Permanent size: %llu, used: %llu (%.2f MB), total used: %llu (%.2f MB)",
                         permanent->size, permanent->used, permUsedMB, permanent->totalUsed,
                         permTotalUsedMB);
-    ImGui::TextDisabled("Scratch size: %llu, used: %llu (%.2f MB), total used: %llu (%.2f MB)",
+    ImGui::TextDisabled("Scratch size: %llu, used: %llu (%.2f MB), total used: %llu (%.2f MB), max "
+                        "used: %llu (%.2f MB)",
                         scratch->size, scratch->used, scratchUsedMB, scratch->totalUsed,
-                        scratchTotalUsedMB);
+                        scratchTotalUsedMB, scratch->maxUsed, scratchMaxUsedMB);
 #    endif
 
     const f32 sliderWidth = 190 * scale;

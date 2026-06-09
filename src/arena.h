@@ -7,6 +7,7 @@ struct Arena {
 
     // Debug
     u64 totalUsed; // Accumulated used
+    u64 maxUsed;   // Updated at every push
 };
 
 static void
@@ -29,7 +30,11 @@ ArenaPush(Arena* arena, u64 size) {
 
     void* result = arena->base + arena->used;
     arena->used += size;
+
+    // Debug
     arena->totalUsed += size;
+    arena->maxUsed = MAX(arena->used, arena->maxUsed);
+
     return result;
 }
 

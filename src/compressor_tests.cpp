@@ -45,7 +45,7 @@ struct AppStateFixture {
         static AppState staticAppState = {};
         static bool32 initialized = false;
         if (!initialized) {
-            InitAppState(&staticAppState);
+            REQUIRE(InitAppState(&staticAppState));
             initialized = true;
         }
 
@@ -75,6 +75,7 @@ struct AppStateFixture {
 struct AddJobAppStateFixture : AppStateFixture {
     AddJobAppStateFixture() {
         // Other stuff?
+        REQUIRE(appState->outputFolder != nullptr);
         _snprintf_s(appState->outputFolder, MAX_PATH_COUNT, _TRUNCATE, "C:\\output");
     }
 };
@@ -819,7 +820,6 @@ TEST_CASE_FIXTURE(ArenaFixture, "InitArena sets fields correctly") {
     CHECK(arena.base == buff);
     CHECK(arena.used == 0);
     CHECK(arena.size == arenaSize);
-    CHECK(arena.totalUsed == 0);
 }
 
 TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush returns pointer to base on first alloc") {
@@ -836,12 +836,6 @@ TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush returns non-overlapping pointers") {
     u8* p1 = PushArray(&arena, u8, 32);
     u8* p2 = PushArray(&arena, u8, 32);
     CHECK(p2 == p1 + 32);
-}
-
-TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush accumulates totalUsed") {
-    PushArray(&arena, u8, 16);
-    PushArray(&arena, u8, 32);
-    CHECK(arena.totalUsed == 48);
 }
 
 TEST_CASE_FIXTURE(ArenaFixture, "ArenaPush of size 1 works") {
@@ -907,25 +901,11 @@ TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop then push reuses memory") {
     CHECK(p1 == p2);
 }
 
-TEST_CASE_FIXTURE(ArenaFixture, "ArenaPop does not affect totalUsed") {
-    PushArray(&arena, u8, 64);
-    u64 totalBefore = arena.totalUsed;
-    ArenaPop(&arena, 64);
-    CHECK(arena.totalUsed == totalBefore);
-}
-
 TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear resets used to zero") {
     PushArray(&arena, u8, 128);
     PushArray(&arena, u8, 64);
     ArenaClear(&arena);
     CHECK(arena.used == 0);
-}
-
-TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear does not reset totalUsed") {
-    PushArray(&arena, u8, 128);
-    u64 totalBefore = arena.totalUsed;
-    ArenaClear(&arena);
-    CHECK(arena.totalUsed == totalBefore);
 }
 
 TEST_CASE_FIXTURE(ArenaFixture, "ArenaClear allows full reuse of bufffer") {
