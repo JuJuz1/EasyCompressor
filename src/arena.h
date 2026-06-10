@@ -8,15 +8,16 @@ struct Arena {
     // Debug
     u64 totalUsed; // Accumulated used
     u64 maxUsed;   // Updated at every push
+    u64 totalFreed;
+    u64 maxFreed;
 };
 
 static void
-InitArena(Arena* arena, void* base, u64 size) {
-    arena->base = static_cast<u8*>(base);
-    arena->used = 0;
-    arena->size = size;
+ArenaInit(Arena* arena, void* base, u64 size) {
+    *arena = {};
 
-    arena->totalUsed = 0;
+    arena->base = static_cast<u8*>(base);
+    arena->size = size;
 }
 
 static void*
@@ -48,11 +49,18 @@ ArenaPushZero(Arena* arena, u64 size) {
 static void
 ArenaPop(Arena* arena, u64 size) {
     ASSERT(arena->used >= size);
+
+    arena->totalFreed += size;
+    arena->maxFreed = MAX(size, arena->maxUsed);
+
     arena->used -= size;
 }
 
 static void
 ArenaClear(Arena* arena) {
+    arena->totalFreed += arena->used;
+    arena->maxFreed = MAX(arena->used, arena->maxUsed);
+
     arena->used = 0;
 }
 

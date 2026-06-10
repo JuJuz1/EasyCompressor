@@ -22,7 +22,7 @@ CANDIDATES TO TEST:
 
 // Now that we use a fixed permanent storage, we have to clear manually
 static void
-ResetAppState(AppState* appState) {
+AppStateReset(AppState* appState) {
     appState->jobCount = 0;
     for (i32 i = 0; i < ARR_COUNT(appState->jobs); ++i) {
         appState->jobs[i].input[0] = '\0';
@@ -52,7 +52,7 @@ struct AppStateFixture {
         appState = &staticAppState;
     }
 
-    ~AppStateFixture() { ResetAppState(appState); }
+    ~AppStateFixture() { AppStateReset(appState); }
 
     bool32
     IsZeroed() {
@@ -763,7 +763,7 @@ TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks corre
     //appState = {};
     //ZeroMemory(appState, sizeof(appState));
     // Manual reset as now we use arenas with fixed permanent storage
-    ResetAppState(appState);
+    AppStateReset(appState);
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n[Codecs]\nh265 !\n[OutputPath]\nC:\\EasyCompTemp");
     REQUIRE(LoadConfigFile(nullptr, appState, path));
     CHECK(appState->defaultTargetSize == doctest::Approx(5.0f));
@@ -771,19 +771,19 @@ TEST_CASE_FIXTURE(LoadConfigFileFixture, "LoadConfigFile applies fallbacks corre
     CHECK(StrEqual(appState->outputFolder, "C:\\EasyCompTemp"));
     this->CleanupCreatedOutputFolder();
 
-    ResetAppState(appState);
+    AppStateReset(appState);
     this->WriteConfig("[Sizes]\n7.5\n    6.42\n");
     REQUIRE(LoadConfigFile(nullptr, appState, path));
     CHECK(appState->defaultTargetSize == doctest::Approx(7.5f));
     this->CleanupCreatedOutputFolder();
 
-    ResetAppState(appState);
+    AppStateReset(appState);
     this->WriteConfig("[Sizes]\n2.0\n5.0 !\n4.0\n");
     REQUIRE(LoadConfigFile(nullptr, appState, path));
     CHECK(appState->defaultTargetSize == doctest::Approx(5.0f));
     this->CleanupCreatedOutputFolder();
 
-    ResetAppState(appState);
+    AppStateReset(appState);
     this->WriteConfig("[Sizes]\n2.\n[Codecs]");
     REQUIRE(LoadConfigFile(nullptr, appState, path));
     CHECK(appState->defaultTargetSize == doctest::Approx(2.0f));
@@ -806,7 +806,7 @@ struct ArenaFixture {
 
     ArenaFixture() {
         ZeroMemory(buff, sizeof(buff));
-        InitArena(&arena, buff, arenaSize);
+        ArenaInit(&arena, buff, arenaSize);
     }
 };
 
@@ -816,7 +816,7 @@ struct TestStruct {
     u64 c;
 };
 
-TEST_CASE_FIXTURE(ArenaFixture, "InitArena sets fields correctly") {
+TEST_CASE_FIXTURE(ArenaFixture, "ArenaInit sets fields correctly") {
     CHECK(arena.base == buff);
     CHECK(arena.used == 0);
     CHECK(arena.size == arenaSize);
