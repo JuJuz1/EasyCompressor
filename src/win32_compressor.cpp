@@ -1818,31 +1818,54 @@ DrawUi(AppState* appState, HINSTANCE hInstance, HWND hWnd, f32 scale, f32 delta)
 
 #    if COMPRESSOR_DEV
     ImGui::TextDisabled("DEV: compressing: %d, cancelled: %d", compressing, cancelled);
-    Arena* permanent = &appState->permanentArena;
+
+    /// Arena diagnostics
+
+    Arena* perm = &appState->permanentArena;
     Arena* scratch = &appState->scratchArena;
 
+    auto* permDiagn = &perm->diagn;
+    auto* scratchDiagn = &scratch->diagn;
+
     f32 toMB = 1 / (1024.0f * 1024.0f);
-    f32 permUsedMB = permanent->used * toMB;
-    f32 permTotalUsedMB = permanent->totalUsed * toMB;
-    f32 permSizeMB = permanent->size * toMB;
+    f32 permSizeMB = perm->size * toMB;
+    f32 permUsedMB = perm->used * toMB;
+    f32 permTotalUsedMB = permDiagn->totalUsed * toMB;
+    f32 permMaxUsedMB = permDiagn->maxUsed * toMB;
+    f32 permTotalFreedMB = permDiagn->totalFreed * toMB;
+    f32 permMaxFreedMB = permDiagn->maxFreed * toMB;
 
     f32 scratchSizeMB = scratch->size * toMB;
     f32 scratchUsedMB = scratch->used * toMB;
-    f32 scratchTotalUsedMB = scratch->totalUsed * toMB;
-    f32 scratchMaxUsedMB = scratch->maxUsed * toMB;
-    f32 scratchTotalFreedMB = scratch->totalFreed * toMB;
-    f32 scratchMaxFreedMB = scratch->maxFreed * toMB;
+    f32 scratchTotalUsedMB = scratchDiagn->totalUsed * toMB;
+    f32 scratchMaxUsedMB = scratchDiagn->maxUsed * toMB;
+    f32 scratchTotalFreedMB = scratchDiagn->totalFreed * toMB;
+    f32 scratchMaxFreedMB = scratchDiagn->maxFreed * toMB;
 
     ImGui::TextDisabled(
-        "Permanent size: %llu (%.2f MB), used: %llu (%.2f MB), total used: %llu (%.2f MB)",
-        permanent->size, permSizeMB, permanent->used, permUsedMB, permanent->totalUsed,
-        permTotalUsedMB);
+        "Permanent size: %llu (%.2f MB), used: %llu (%.2f MB), total used: %llu (%.2f MB), max "
+        "used: %llu (%.2f MB), total freed: %llu (%.2f MB), max freed: %llu (%.2f MB)",
+        perm->size, permSizeMB, perm->used, permUsedMB, permDiagn->totalUsed, permTotalUsedMB,
+        permDiagn->maxUsed, permMaxUsedMB, permDiagn->totalFreed, permTotalFreedMB,
+        permDiagn->maxFreed, permMaxFreedMB);
+    ImGui::TextDisabled("Permanent counts: init: %llu, push: %llu, pushZero: %llu, pop: %llu, "
+                        "clear: %llu, setPos: %llu",
+                        permDiagn->initCount, permDiagn->pushCount, permDiagn->pushZeroCount,
+                        permDiagn->popCount, permDiagn->clearCount, permDiagn->setPosCount);
+
+    // Because the scratch arena is essentially a per-frame arena which is cleared at the start of
+    // every frame, the used, totalFreed, maxFreed and clearCount (more?) are not good metrics here
     ImGui::TextDisabled(
         "Scratch size: %llu (%.2f MB), used: %llu (%.2f MB), total used: %llu (%.2f MB), max "
         "used: %llu (%.2f MB), total freed: %llu (%.2f MB), max freed: %llu (%.2f MB)",
-        scratch->size, scratchSizeMB, scratch->used, scratchUsedMB, scratch->totalUsed,
-        scratchTotalUsedMB, scratch->maxUsed, scratchMaxUsedMB, scratch->totalFreed,
-        scratchTotalFreedMB, scratch->maxFreed, scratchMaxFreedMB);
+        scratch->size, scratchSizeMB, scratch->used, scratchUsedMB, scratchDiagn->totalUsed,
+        scratchTotalUsedMB, scratchDiagn->maxUsed, scratchMaxUsedMB, scratchDiagn->totalFreed,
+        scratchTotalFreedMB, scratchDiagn->maxFreed, scratchMaxFreedMB);
+    ImGui::TextDisabled("Scratch counts: init: %llu, push: %llu, pushZero: %llu, pop: %llu, clear: "
+                        "%llu, setPos: %llu",
+                        scratchDiagn->initCount, scratchDiagn->pushCount,
+                        scratchDiagn->pushZeroCount, scratchDiagn->popCount,
+                        scratchDiagn->clearCount, scratchDiagn->setPosCount);
 #    endif
 
     const f32 sliderWidth = 190 * scale;
