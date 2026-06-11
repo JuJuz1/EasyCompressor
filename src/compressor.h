@@ -39,6 +39,15 @@ typedef wchar_t wchar;
 
 // clang-format on
 
+#define KB(x) ((x) * 1024ULL)
+#define MB(x) (KB(x) * 1024ULL)
+#define GB(x) (MB(x) * 1024ULL)
+#define TB(x) (GB(x) * 1024ULL)
+
+// The compiler warns about implicit conversion at /W4 at least
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
+#define MAX(a, b) ((a) <= (b) ? (b) : (a))
+
 /**
  * Returns number of bytes, NOT the number of "real" characters
  */

@@ -30,11 +30,23 @@ enum class AddJobResult : u8 {
 // MAX_PATH is 260 defined by Windows
 // TODO: if we want to support wide paths (32 767 characters), would need to allocate heap memory
 // https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
-#define MAX_PATH_COUNT 512
+#define MAX_PATH_COUNT 32767 // 512
+
+#define OPEN_FLASH_TIMER_START 5.0f
+
+#define MAX_JOBS 50
+
+// All in MB
+#define MIN_TARGET_SIZE 0.5f
+#define MAX_TARGET_SIZE 5000.0f
+
+#define TARGET_SIZES_COUNT 5
+
+#define CONFIG_FILE_MAX_SIZE (1024 + MAX_PATH_COUNT)
 
 struct UIJob {
-    char input[MAX_PATH_COUNT];
-    char output[MAX_PATH_COUNT]; // No suffix anymore
+    char* input;
+    char* output; // No suffix anymore
     //bool32 hasValidFileExtension; Some file extension is required by ffmpeg pass 2
     // We pass "-f mp4" as default if this is false
 
@@ -54,18 +66,6 @@ struct UIJob {
     f32 openFlashTimer; // Open button flash
 };
 
-#define OPEN_FLASH_TIMER_START 5.0f
-
-#define MAX_JOBS 50
-
-// All in MB
-#define MIN_TARGET_SIZE 0.5f
-#define MAX_TARGET_SIZE 5000.0f
-
-#define TARGET_SIZES_COUNT 5
-
-#define CONFIG_FILE_MAX_SIZE (1024 + MAX_PATH_COUNT)
-
 // Mainly for popup dialogs
 struct UIState {
     char errorMsg[256];      // Buffer for different error messages
@@ -79,6 +79,15 @@ struct UIState {
 };
 
 struct AppState {
+    void* permanentMemory;
+    u64 permanentMemorySize;
+    void* scratchMemory;
+    u64 scratchMemorySize;
+
+    // Permanent arena is not necessary but helps the setup code so it's not so manual
+    Arena permanentArena;
+    Arena scratchArena;
+
     UIJob jobs[MAX_JOBS];
     volatile long jobCount;
     // If we were to use condition variables instead of spin lock
@@ -95,14 +104,16 @@ struct AppState {
     // All UI state with ImGui
     UIState uiState;
 
-    char outputFolder[MAX_PATH_COUNT]; // User/Documents
+    char* outputFolder; // User/Documents
     //bool32 useOutputFolder;
 
-    char exeDir[MAX_PATH_COUNT];  // Absolute path to the exe directory
-    char tempDir[MAX_PATH_COUNT]; // Temp dir for ffmpeg logs
+    char* exeDir;  // Absolute path to the exe directory
+    char* tempDir; // Temp dir for ffmpeg logs
 
-    char appData[MAX_PATH_COUNT]; // AppData/Local/EasyCompressor, where the config and imgui.ini
-                                  // are stored
-    char configFilePath[MAX_PATH_COUNT]; // AppData/Local/EasyCompressor/easycompressor.cfg
-    char ffmpegPath[MAX_PATH_COUNT];     // Relative to working directory OR TODO: path?
+    char* appData;        // AppData/Local/EasyCompressor, where the config and imgui.ini
+                          // are stored
+    char* imguiIniPath;   // AppData/Local/EasyCompressor/imgui.ini
+    char* configFilePath; // AppData/Local/EasyCompressor/easycompressor.cfg
+
+    char* ffmpegPath; // Relative to working directory OR TODO: path?
 };
